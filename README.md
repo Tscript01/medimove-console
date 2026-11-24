@@ -1,7 +1,10 @@
 # MediMove Console
 
 Nuxt 4 + TypeScript web console for MediMove operations staff. This repository is
-independent of the backend and mobile app repositories.
+independent of the backend and mobile app repositories. A read-only snapshot of
+the backend docs and selected mobile reference patterns is committed in
+`reference/` so the project can be continued on a machine that does not have the
+original backend/mobile folders. See `reference/README.md`.
 
 ## Scope of this first slice
 

@@ -12,6 +12,14 @@ read it first, then read the canonical backend docs it points to.
 | Backend | `C:\Users\T_script\Desktop\interbackend` |
 | Mobile app (read-only reference) | `C:\Users\T_script\Desktop\MoblieAppTest\medimove` |
 
+> **On a different PC:** the absolute paths above will not exist. Use the
+> portable snapshot committed in `reference/` instead. Start with
+> `reference/README.md`, then `reference/backend/docs/AI_FRONTEND_HANDOFF.md`,
+> `reference/backend/docs/openapi.yaml`, `reference/backend/docs/API.md`,
+> `reference/backend/src/auth/permissions.ts` and
+> `reference/backend/src/utils/access.ts`. The mobile reference patterns are in
+> `reference/mobile/src/`.
+
 ## Step 1 — read these before writing code
 
 1. `C:\Users\T_script\Desktop\interbackend\docs\AI_FRONTEND_HANDOFF.md`

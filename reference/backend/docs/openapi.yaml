@@ -1,0 +1,5920 @@
+openapi: 3.1.0
+info:
+  title: MediMove API
+  version: 1.0.0
+  description: |-
+    Backend API for the MediMove medical-transport and ambulance-coordination platform.
+
+    **Authentication** — call `/auth/login` (or `/auth/verify-email`) to get an
+    `accessToken` (short-lived) and a `refreshToken`. Send the access token as
+    `Authorization: Bearer <accessToken>`. On `401`, rotate with `/auth/refresh`
+    and retry once.
+
+    **Errors** — every error is `{ success: false, message, code? }`. Out-of-scope
+    single records return `404` (never `403`) so existence is not leaked.
+
+    **Pagination** — list endpoints accept `page`/`limit` and return a
+    `pagination` block.
+
+    **Money** — all amounts are integer **kobo** (1 NGN = 100 kobo) and are always
+    computed server-side.
+
+    **Rate limits** — auth, login, OTP and geocode routes are rate-limited.
+
+    **Note:** the example schemas are representative; the API may return
+    additional fields. See `docs/API.md` for the human-readable reference.
+servers:
+  - url: /api
+    description: Current host (path prefix)
+  - url: http://localhost:5000/api
+    description: Local development
+tags:
+  - name: Auth
+    description: Registration, login, sessions and passwords
+  - name: Profile
+    description: Patient profile, emergency contacts, consent and medical info
+  - name: Locations
+    description: Saved locations, coverage and geocoding
+  - name: Bookings
+    description: Emergency booking lifecycle and dispatch
+  - name: Dispatch
+    description: Crew offers and dispatcher operations
+  - name: Trips
+    description: Crew trip operations and GPS tracking
+  - name: Hospitals
+    description: Hospital directory and self-maintained operations
+  - name: Quality
+    description: Trip history, feedback and complaints
+  - name: Pricing
+    description: Fare estimates and pricing rules
+  - name: Payments
+    description: Payments, wallet and receipts
+  - name: Notifications
+    description: Notification feed and outbox management
+  - name: Providers
+    description: Provider, fleet and crew management
+  - name: Admin
+    description: Administration, verification and audit
+components:
+  securitySchemes:
+    bearerAuth:
+      type: http
+      scheme: bearer
+      bearerFormat: JWT
+      description: "Short-lived access token from `/auth/login` or `/auth/verify-email`. Send as `Authorization: Bearer <token>`. On 401, rotate via `/auth/refresh` and retry once."
+  parameters:
+    Page:
+      name: page
+      in: query
+      schema:
+        type: integer
+        minimum: 1
+        default: 1
+      description: 1-based page number.
+    Limit:
+      name: limit
+      in: query
+      schema:
+        type: integer
+        minimum: 1
+        maximum: 100
+        default: 20
+      description: Page size (clamped).
+    BookingId:
+      name: id
+      in: path
+      required: true
+      schema:
+        type: string
+      description: Booking id.
+    Id:
+      name: id
+      in: path
+      required: true
+      schema:
+        type: string
+      description: Resource id.
+  schemas:
+    Error:
+      type: object
+      required:
+        - success
+        - message
+      properties:
+        success:
+          type: boolean
+          example: false
+        message:
+          type: string
+          example: Human-readable message
+        code:
+          type: string
+          example: VALIDATION_ERROR
+        field:
+          type: string
+          nullable: true
+        details:
+          nullable: true
+      additionalProperties: true
+    Pagination:
+      type: object
+      properties:
+        page:
+          type: integer
+          example: 1
+        limit:
+          type: integer
+          example: 20
+        total:
+          type: integer
+          example: 42
+        totalPages:
+          type: integer
+          example: 3
+        hasNext:
+          type: boolean
+        hasPrev:
+          type: boolean
+    PublicUser:
+      type: object
+      properties:
+        id:
+          type: string
+          format: uuid
+        email:
+          type: string
+          format: email
+        fullName:
+          type: string
+        phone:
+          type: string
+        role:
+          type: string
+          enum:
+            - PATIENT
+            - CREW
+            - DISPATCHER
+            - HOSPITAL_STAFF
+            - PROVIDER_ADMIN
+            - PLATFORM_ADMIN
+            - STATE_ADMIN
+        stateId:
+          type: string
+          nullable: true
+        hospitalId:
+          type: string
+          nullable: true
+        providerId:
+          type: string
+          nullable: true
+        emailVerified:
+          type: boolean
+        phoneVerified:
+          type: boolean
+        walletBalanceKobo:
+          type: integer
+          description: Wallet balance in kobo (1 NGN = 100 kobo).
+        createdAt:
+          type: string
+          format: date-time
+      additionalProperties: true
+    AuthResponse:
+      type: object
+      properties:
+        success:
+          type: boolean
+          example: true
+        user:
+          $ref: "#/components/schemas/PublicUser"
+        accessToken:
+          type: string
+        refreshToken:
+          type: string
+        tokenType:
+          type: string
+          example: Bearer
+        expiresIn:
+          type: string
+          example: 15m
+        refreshTokenExpiresAt:
+          type: string
+          format: date-time
+    RefreshResponse:
+      type: object
+      properties:
+        success:
+          type: boolean
+          example: true
+        accessToken:
+          type: string
+        refreshToken:
+          type: string
+        tokenType:
+          type: string
+          example: Bearer
+        expiresIn:
+          type: string
+          example: 15m
+        refreshTokenExpiresAt:
+          type: string
+          format: date-time
+    RegisterRequest:
+      type: object
+      required:
+        - email
+        - password
+        - fullName
+        - phone
+      properties:
+        email:
+          type: string
+          format: email
+        password:
+          type: string
+          minLength: 8
+          format: password
+        fullName:
+          type: string
+        phone:
+          type: string
+          example: "+2348012345678"
+    LoginRequest:
+      type: object
+      required:
+        - email
+        - password
+      properties:
+        email:
+          type: string
+          format: email
+        password:
+          type: string
+          format: password
+    VerifyEmailRequest:
+      type: object
+      required:
+        - email
+        - code
+      properties:
+        email:
+          type: string
+          format: email
+        code:
+          type: string
+          example: "123456"
+          description: 6-digit code from the email.
+    RefreshRequest:
+      type: object
+      required:
+        - refreshToken
+      properties:
+        refreshToken:
+          type: string
+    ForgotPasswordRequest:
+      type: object
+      required:
+        - email
+      properties:
+        email:
+          type: string
+          format: email
+    ResetPasswordRequest:
+      type: object
+      required:
+        - email
+        - code
+        - newPassword
+      properties:
+        email:
+          type: string
+          format: email
+        code:
+          type: string
+        newPassword:
+          type: string
+          minLength: 8
+          format: password
+    BookingCreateRequest:
+      type: object
+      required:
+        - pickupAddress
+        - pickupLat
+        - pickupLng
+        - destAddress
+        - destLat
+        - destLng
+        - callbackPhone
+        - emergencyCategory
+      properties:
+        pickupAddress:
+          type: string
+        pickupLat:
+          type: number
+          example: 7.715
+        pickupLng:
+          type: number
+          example: 5.2515
+        landmark:
+          type: string
+          nullable: true
+        destAddress:
+          type: string
+        destLat:
+          type: number
+        destLng:
+          type: number
+        destinationHospitalId:
+          type: string
+          nullable: true
+        providerId:
+          type: string
+          nullable: true
+          description: Preferred provider; resolved server-side when omitted.
+        isForSelf:
+          type: boolean
+          default: true
+        patientName:
+          type: string
+          nullable: true
+          description: Required when isForSelf is false.
+        patientPhone:
+          type: string
+          nullable: true
+          description: Required when isForSelf is false.
+        patientAge:
+          type: integer
+          nullable: true
+        patientGender:
+          type: string
+          enum:
+            - MALE
+            - FEMALE
+            - OTHER
+          nullable: true
+        callbackPhone:
+          type: string
+        emergencyCategory:
+          type: string
+          enum:
+            - MEDICAL
+            - TRAUMA
+            - CARDIAC
+            - RESPIRATORY
+            - OBSTETRIC
+            - PEDIATRIC
+            - PSYCHIATRIC
+            - ACCIDENT
+            - OTHER
+        notes:
+          type: string
+          nullable: true
+        idempotencyKey:
+          type: string
+          nullable: true
+          description: Unique per requester; makes a retried create return the original booking.
+      additionalProperties: false
+    BookingStatusUpdateRequest:
+      type: object
+      required:
+        - status
+      properties:
+        status:
+          type: string
+          enum:
+            - REQUESTED
+            - OFFERED
+            - ACCEPTED
+            - EN_ROUTE
+            - ARRIVED
+            - PATIENT_ON_BOARD
+            - AT_HOSPITAL
+            - COMPLETED
+            - CANCELLED
+            - FAILED
+        reason:
+          type: string
+          nullable: true
+          description: Required for FAILED, and for an operator cancelling an in-progress trip.
+        crewProfileId:
+          type: string
+          nullable: true
+          description: Operator recording acceptance for an eligible crew.
+    DispatchAssignRequest:
+      type: object
+      required:
+        - crewProfileId
+      properties:
+        crewProfileId:
+          type: string
+        ambulanceId:
+          type: string
+          nullable: true
+        reason:
+          type: string
+          nullable: true
+    TripStatusRequest:
+      type: object
+      required:
+        - status
+      properties:
+        status:
+          type: string
+          enum:
+            - EN_ROUTE
+            - ARRIVED
+            - PATIENT_ON_BOARD
+            - AT_HOSPITAL
+            - COMPLETED
+        reason:
+          type: string
+          nullable: true
+    TripLocationRequest:
+      type: object
+      required:
+        - latitude
+        - longitude
+      properties:
+        latitude:
+          type: number
+          minimum: -90
+          maximum: 90
+        longitude:
+          type: number
+          minimum: -180
+          maximum: 180
+        accuracyMeters:
+          type: number
+          nullable: true
+        speedKph:
+          type: number
+          nullable: true
+        headingDeg:
+          type: number
+          nullable: true
+        source:
+          type: string
+          enum:
+            - GPS
+            - MAP_PIN
+          nullable: true
+          default: GPS
+    ReasonRequest:
+      type: object
+      required:
+        - reason
+      properties:
+        reason:
+          type: string
+    OptionalReasonRequest:
+      type: object
+      properties:
+        reason:
+          type: string
+          nullable: true
+    PaymentInitializeRequest:
+      type: object
+      required:
+        - type
+        - method
+      properties:
+        type:
+          type: string
+          enum:
+            - BOOKING
+            - WALLET_FUNDING
+            - SAVINGS
+        method:
+          type: string
+          enum:
+            - CARD
+            - BANK_TRANSFER
+            - WALLET
+            - CASH
+        amountKobo:
+          type: integer
+          description: Required for WALLET_FUNDING / SAVINGS.
+        bookingId:
+          type: string
+          nullable: true
+        savingsGoalId:
+          type: string
+          nullable: true
+    PaymentVerifyRequest:
+      type: object
+      required:
+        - transactionRef
+      properties:
+        transactionRef:
+          type: string
+    RefundRequest:
+      type: object
+      properties:
+        amountKobo:
+          type: integer
+          nullable: true
+          description: Defaults to the full settled amount.
+        reason:
+          type: string
+          nullable: true
+    CashPaymentRequest:
+      type: object
+      required:
+        - bookingId
+        - amountKobo
+      properties:
+        bookingId:
+          type: string
+        amountKobo:
+          type: integer
+    LocationCreateRequest:
+      type: object
+      required:
+        - source
+      properties:
+        label:
+          type: string
+          nullable: true
+        source:
+          type: string
+          enum:
+            - GPS
+            - MAP_PIN
+            - MANUAL
+        latitude:
+          type: number
+          nullable: true
+        longitude:
+          type: number
+          nullable: true
+        accuracyMeters:
+          type: number
+          nullable: true
+        address:
+          type: string
+          nullable: true
+        landmark:
+          type: string
+          nullable: true
+          description: Required when source is MANUAL.
+    EstimateRequest:
+      type: object
+      required:
+        - pickupLat
+        - pickupLng
+        - destLat
+        - destLng
+      properties:
+        pickupLat:
+          type: number
+        pickupLng:
+          type: number
+        destLat:
+          type: number
+        destLng:
+          type: number
+        vehicleCategory:
+          type: string
+          enum:
+            - BASIC_LIFE_SUPPORT
+            - ADVANCED_LIFE_SUPPORT
+            - NEONATAL
+            - PATIENT_TRANSPORT
+        destinationHospitalId:
+          type: string
+          nullable: true
+    FeedbackRequest:
+      type: object
+      required:
+        - rating
+      properties:
+        rating:
+          type: integer
+          minimum: 1
+          maximum: 5
+        comment:
+          type: string
+          nullable: true
+    ComplaintCreateRequest:
+      type: object
+      required:
+        - category
+        - subject
+        - description
+      properties:
+        category:
+          type: string
+          enum:
+            - SERVICE_QUALITY
+            - STAFF_CONDUCT
+            - BILLING
+            - DELAY
+            - SAFETY
+            - OTHER
+        subject:
+          type: string
+        description:
+          type: string
+        bookingId:
+          type: string
+          nullable: true
+    ComplaintStatusRequest:
+      type: object
+      required:
+        - status
+      properties:
+        status:
+          type: string
+          enum:
+            - OPEN
+            - IN_REVIEW
+            - RESOLVED
+            - REJECTED
+            - CLOSED
+        note:
+          type: string
+          nullable: true
+        resolution:
+          type: string
+          nullable: true
+    SuspendRequest:
+      type: object
+      properties:
+        reason:
+          type: string
+          nullable: true
+    CrewInviteRequest:
+      type: object
+      required:
+        - email
+        - crewRole
+      properties:
+        email:
+          type: string
+          format: email
+        phone:
+          type: string
+          nullable: true
+        crewRole:
+          type: string
+          enum:
+            - DRIVER
+            - PARAMEDIC
+            - EMT
+            - NURSE
+            - DOCTOR
+            - ASSISTANT
+    Booking:
+      type: object
+      properties:
+        id:
+          type: string
+          format: uuid
+        reference:
+          type: string
+          example: MM-BOOK-AB12CD34
+        status:
+          type: string
+          enum:
+            - REQUESTED
+            - OFFERED
+            - ACCEPTED
+            - EN_ROUTE
+            - ARRIVED
+            - PATIENT_ON_BOARD
+            - AT_HOSPITAL
+            - COMPLETED
+            - CANCELLED
+            - FAILED
+        isDispatched:
+          type: boolean
+          description: True only once a verified, active crew has accepted.
+        emergencyCategory:
+          type: string
+        pickupAddress:
+          type: string
+        pickupLat:
+          type: number
+        pickupLng:
+          type: number
+        destAddress:
+          type: string
+        destLat:
+          type: number
+        destLng:
+          type: number
+        distanceKm:
+          type: number
+        estimatedFare:
+          type: integer
+          description: Server-computed fare in kobo.
+        fareBreakdown:
+          type: object
+          nullable: true
+        providerId:
+          type: string
+        stateId:
+          type: string
+          nullable: true
+        assignedAmbulanceId:
+          type: string
+          nullable: true
+        acceptedById:
+          type: string
+          nullable: true
+        paidAt:
+          type: string
+          format: date-time
+          nullable: true
+        createdAt:
+          type: string
+          format: date-time
+      additionalProperties: true
+    DispatchOffer:
+      type: object
+      properties:
+        id:
+          type: string
+          format: uuid
+        bookingId:
+          type: string
+        providerId:
+          type: string
+        ambulanceId:
+          type: string
+        crewProfileId:
+          type: string
+        round:
+          type: integer
+        status:
+          type: string
+          enum:
+            - PENDING
+            - ACCEPTED
+            - REJECTED
+            - EXPIRED
+            - CANCELLED
+        capabilityMatch:
+          type: boolean
+        distanceKm:
+          type: number
+          nullable: true
+        expiresAt:
+          type: string
+          format: date-time
+      additionalProperties: true
+    Payment:
+      type: object
+      properties:
+        id:
+          type: string
+          format: uuid
+        transactionRef:
+          type: string
+        amountKobo:
+          type: integer
+        currency:
+          type: string
+          example: NGN
+        status:
+          type: string
+          enum:
+            - PENDING
+            - SUCCESSFUL
+            - FAILED
+            - CANCELLED
+        type:
+          type: string
+        method:
+          type: string
+          enum:
+            - CARD
+            - BANK_TRANSFER
+            - WALLET
+            - CASH
+            - OTHER
+        bookingId:
+          type: string
+          nullable: true
+        receiptNumber:
+          type: string
+          nullable: true
+        refundStatus:
+          type: string
+          enum:
+            - NONE
+            - PENDING
+            - REFUNDED
+            - FAILED
+        verifiedAt:
+          type: string
+          format: date-time
+          nullable: true
+      additionalProperties: true
+    Tracking:
+      type: object
+      properties:
+        bookingId:
+          type: string
+        status:
+          type: string
+        isLive:
+          type: boolean
+        staleAfterSeconds:
+          type: integer
+        lastKnownSource:
+          type: string
+          nullable: true
+        location:
+          type: object
+          nullable: true
+          properties:
+            latitude:
+              type: number
+            longitude:
+              type: number
+            recordedAt:
+              type: string
+              format: date-time
+            ageSeconds:
+              type: integer
+            isLive:
+              type: boolean
+        nextWaypoint:
+          type: string
+          nullable: true
+        distanceRemainingKm:
+          type: number
+          nullable: true
+        etaMinutes:
+          type: number
+          nullable: true
+        etaAt:
+          type: string
+          format: date-time
+          nullable: true
+        recentLocations:
+          type: array
+          items:
+            type: object
+    Hospital:
+      type: object
+      properties:
+        id:
+          type: string
+          example: hosp-1
+        name:
+          type: string
+        city:
+          type: string
+        stateId:
+          type: string
+        lat:
+          type: number
+        lng:
+          type: number
+        category:
+          type: string
+        phone:
+          type: string
+          nullable: true
+        isActive:
+          type: boolean
+        acceptsEmergencies:
+          type: boolean
+      additionalProperties: true
+    Notification:
+      type: object
+      properties:
+        id:
+          type: string
+          format: uuid
+        channel:
+          type: string
+          enum:
+            - EMAIL
+            - SMS
+            - PUSH
+            - WHATSAPP
+        eventType:
+          type: string
+        status:
+          type: string
+          enum:
+            - PENDING
+            - SENT
+            - FAILED
+            - CANCELLED
+        attempts:
+          type: integer
+        createdAt:
+          type: string
+          format: date-time
+      additionalProperties: true
+  responses:
+    Unauthorized:
+      description: Missing or invalid access token.
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/Error"
+    Forbidden:
+      description: Authenticated but not permitted (role/permission/scope).
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/Error"
+    NotFound:
+      description: Not found, or out of the caller's data scope.
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/Error"
+    ValidationError:
+      description: Request failed validation.
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/Error"
+paths:
+  /auth/register:
+    post:
+      tags:
+        - Auth
+      summary: Create account + send verification OTP
+      operationId: postauth_register
+      security: []
+      requestBody:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/RegisterRequest"
+        required: true
+      responses:
+        "201":
+          description: Created
+          content:
+            application/json:
+              schema: &a1
+                type: object
+                properties:
+                  success:
+                    type: boolean
+                    example: true
+                additionalProperties: true
+        "422":
+          $ref: "#/components/responses/ValidationError"
+  /auth/verify-email:
+    post:
+      tags:
+        - Auth
+      summary: Verify OTP → token pair
+      operationId: postauth_verify_email
+      security: []
+      requestBody:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/VerifyEmailRequest"
+        required: true
+      responses:
+        "200":
+          description: Success
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/AuthResponse"
+        "422":
+          $ref: "#/components/responses/ValidationError"
+  /auth/resend-verification:
+    post:
+      tags:
+        - Auth
+      summary: Resend verification OTP
+      operationId: postauth_resend_verification
+      security: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: true
+              description: JSON request body. See the endpoint summary and docs/API.md for fields.
+      responses:
+        "200":
+          description: Success
+          content:
+            application/json:
+              schema: *a1
+        "422":
+          $ref: "#/components/responses/ValidationError"
+  /auth/login:
+    post:
+      tags:
+        - Auth
+      summary: Email + password login
+      operationId: postauth_login
+      security: []
+      requestBody:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/LoginRequest"
+        required: true
+      responses:
+        "200":
+          description: Success
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/AuthResponse"
+        "422":
+          $ref: "#/components/responses/ValidationError"
+  /auth/refresh:
+    post:
+      tags:
+        - Auth
+      summary: Rotate refresh token → new token pair
+      operationId: postauth_refresh
+      security: []
+      requestBody:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/RefreshRequest"
+        required: true
+      responses:
+        "200":
+          description: Success
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/RefreshResponse"
+        "422":
+          $ref: "#/components/responses/ValidationError"
+  /auth/logout:
+    post:
+      tags:
+        - Auth
+      summary: Revoke current session
+      operationId: postauth_logout
+      security: []
+      requestBody:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/RefreshRequest"
+        required: true
+      responses:
+        "200":
+          description: Success
+          content:
+            application/json:
+              schema: *a1
+        "422":
+          $ref: "#/components/responses/ValidationError"
+  /auth/logout-all:
+    post:
+      tags:
+        - Auth
+      summary: Revoke all sessions
+      operationId: postauth_logout_all
+      security:
+        - bearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: true
+              description: JSON request body. See the endpoint summary and docs/API.md for fields.
+      responses:
+        "200":
+          description: Success
+          content:
+            application/json:
+              schema: *a1
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "422":
+          $ref: "#/components/responses/ValidationError"
+  /auth/me:
+    get:
+      tags:
+        - Auth
+      summary: Authenticated profile
+      operationId: getauth_me
+      security:
+        - bearerAuth: []
+      responses:
+        "200":
+          description: Success
+          content:
+            application/json:
+              schema: *a1
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+  /auth/sessions:
+    get:
+      tags:
+        - Auth
+      summary: List active sessions/devices
+      operationId: getauth_sessions
+      security:
+        - bearerAuth: []
+      responses:
+        "200":
+          description: Success
+          content:
+            application/json:
+              schema: *a1
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+  /auth/sessions/{id}:
+    delete:
+      tags:
+        - Auth
+      summary: Revoke a specific session
+      operationId: deleteauth_sessions_id
+      security:
+        - bearerAuth: []
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+          description: id path parameter.
+      responses:
+        "200":
+          description: Success
+          content:
+            application/json:
+              schema: *a1
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "404":
+          $ref: "#/components/responses/NotFound"
+  /auth/password/change:
+    post:
+      tags:
+        - Auth
+      summary: Change password (verifies current)
+      operationId: postauth_password_change
+      security:
+        - bearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: true
+              description: JSON request body. See the endpoint summary and docs/API.md for fields.
+      responses:
+        "200":
+          description: Success
+          content:
+            application/json:
+              schema: *a1
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "422":
+          $ref: "#/components/responses/ValidationError"
+  /auth/password/forgot:
+    post:
+      tags:
+        - Auth
+      summary: Start password reset (OTP)
+      operationId: postauth_password_forgot
+      security: []
+      requestBody:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/ForgotPasswordRequest"
+        required: true
+      responses:
+        "200":
+          description: Success
+          content:
+            application/json:
+              schema: *a1
+        "422":
+          $ref: "#/components/responses/ValidationError"
+  /auth/password/reset:
+    post:
+      tags:
+        - Auth
+      summary: Complete password reset
+      operationId: postauth_password_reset
+      security: []
+      requestBody:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/ResetPasswordRequest"
+        required: true
+      responses:
+        "200":
+          description: Success
+          content:
+            application/json:
+              schema: *a1
+        "422":
+          $ref: "#/components/responses/ValidationError"
+  /profile:
+    get:
+      tags:
+        - Profile
+      summary: Profile + completion
+      operationId: getprofile
+      security:
+        - bearerAuth: []
+      description: Requires permission `profile:read:own`.
+      responses:
+        "200":
+          description: Success
+          content:
+            application/json:
+              schema: *a1
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+    patch:
+      tags:
+        - Profile
+      summary: Update name/phone/DOB/language
+      operationId: patchprofile
+      security:
+        - bearerAuth: []
+      description: Requires permission `profile:update:own`.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: true
+              description: JSON request body. See the endpoint summary and docs/API.md for fields.
+      responses:
+        "200":
+          description: Success
+          content:
+            application/json:
+              schema: *a1
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "422":
+          $ref: "#/components/responses/ValidationError"
+  /profile/phone/request-verification:
+    post:
+      tags:
+        - Profile
+      summary: Send a phone OTP
+      operationId: postprofile_phone_request_verification
+      security:
+        - bearerAuth: []
+      description: Requires permission `phone:verify`.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: true
+              description: JSON request body. See the endpoint summary and docs/API.md for fields.
+      responses:
+        "200":
+          description: Success
+          content:
+            application/json:
+              schema: *a1
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "422":
+          $ref: "#/components/responses/ValidationError"
+  /profile/phone/verify:
+    post:
+      tags:
+        - Profile
+      summary: Verify the phone OTP
+      operationId: postprofile_phone_verify
+      security:
+        - bearerAuth: []
+      description: Requires permission `phone:verify`.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: true
+              description: JSON request body. See the endpoint summary and docs/API.md for fields.
+      responses:
+        "200":
+          description: Success
+          content:
+            application/json:
+              schema: *a1
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "422":
+          $ref: "#/components/responses/ValidationError"
+  /profile/emergency-contacts:
+    get:
+      tags:
+        - Profile
+      summary: List contacts
+      operationId: getprofile_emergency_contacts
+      security:
+        - bearerAuth: []
+      description: Requires permission `emergency-contact:manage`.
+      responses:
+        "200":
+          description: Success
+          content:
+            application/json:
+              schema: *a1
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+    post:
+      tags:
+        - Profile
+      summary: Add a contact
+      operationId: postprofile_emergency_contacts
+      security:
+        - bearerAuth: []
+      description: Requires permission `emergency-contact:manage`.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: true
+              description: JSON request body. See the endpoint summary and docs/API.md for fields.
+      responses:
+        "200":
+          description: Success
+          content:
+            application/json:
+              schema: *a1
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "422":
+          $ref: "#/components/responses/ValidationError"
+  /profile/emergency-contacts/{id}:
+    patch:
+      tags:
+        - Profile
+      summary: Edit a contact
+      operationId: patchprofile_emergency_contacts_id
+      security:
+        - bearerAuth: []
+      description: Requires permission `emergency-contact:manage`.
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+          description: id path parameter.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: true
+              description: JSON request body. See the endpoint summary and docs/API.md for fields.
+      responses:
+        "200":
+          description: Success
+          content:
+            application/json:
+              schema: *a1
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "422":
+          $ref: "#/components/responses/ValidationError"
+    delete:
+      tags:
+        - Profile
+      summary: Remove a contact
+      operationId: deleteprofile_emergency_contacts_id
+      security:
+        - bearerAuth: []
+      description: Requires permission `emergency-contact:manage`.
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+          description: id path parameter.
+      responses:
+        "200":
+          description: Success
+          content:
+            application/json:
+              schema: *a1
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "404":
+          $ref: "#/components/responses/NotFound"
+  /profile/emergency-contacts/{id}/primary:
+    post:
+      tags:
+        - Profile
+      summary: Set primary contact
+      operationId: postprofile_emergency_contacts_id_primary
+      security:
+        - bearerAuth: []
+      description: Requires permission `emergency-contact:manage`.
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+          description: id path parameter.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: true
+              description: JSON request body. See the endpoint summary and docs/API.md for fields.
+      responses:
+        "200":
+          description: Success
+          content:
+            application/json:
+              schema: *a1
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "422":
+          $ref: "#/components/responses/ValidationError"
+  /profile/consents:
+    get:
+      tags:
+        - Profile
+      summary: Consent state + history
+      operationId: getprofile_consents
+      security:
+        - bearerAuth: []
+      description: Requires permission `consent:manage`.
+      responses:
+        "200":
+          description: Success
+          content:
+            application/json:
+              schema: *a1
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+    post:
+      tags:
+        - Profile
+      summary: Grant consent
+      operationId: postprofile_consents
+      security:
+        - bearerAuth: []
+      description: Requires permission `consent:manage`.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: true
+              description: JSON request body. See the endpoint summary and docs/API.md for fields.
+      responses:
+        "200":
+          description: Success
+          content:
+            application/json:
+              schema: *a1
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "422":
+          $ref: "#/components/responses/ValidationError"
+  /profile/consents/{type}/withdraw:
+    post:
+      tags:
+        - Profile
+      summary: Withdraw consent
+      operationId: postprofile_consents_type_withdraw
+      security:
+        - bearerAuth: []
+      description: Requires permission `consent:manage`.
+      parameters:
+        - name: type
+          in: path
+          required: true
+          schema:
+            type: string
+          description: type path parameter.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: true
+              description: JSON request body. See the endpoint summary and docs/API.md for fields.
+      responses:
+        "200":
+          description: Success
+          content:
+            application/json:
+              schema: *a1
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "422":
+          $ref: "#/components/responses/ValidationError"
+  /profile/medical:
+    get:
+      tags:
+        - Profile
+      summary: Own medical info, consent-gated
+      operationId: getprofile_medical
+      security:
+        - bearerAuth: []
+      description: Requires permission `medical:read:own`.
+      responses:
+        "200":
+          description: Success
+          content:
+            application/json:
+              schema: *a1
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+    put:
+      tags:
+        - Profile
+      summary: Create/replace medical info
+      operationId: putprofile_medical
+      security:
+        - bearerAuth: []
+      description: Requires permission `medical:write:own`.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: true
+              description: JSON request body. See the endpoint summary and docs/API.md for fields.
+      responses:
+        "200":
+          description: Success
+          content:
+            application/json:
+              schema: *a1
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "422":
+          $ref: "#/components/responses/ValidationError"
+    delete:
+      tags:
+        - Profile
+      summary: Delete medical info
+      operationId: deleteprofile_medical
+      security:
+        - bearerAuth: []
+      description: Requires permission `medical:write:own`.
+      responses:
+        "200":
+          description: Success
+          content:
+            application/json:
+              schema: *a1
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+  /states:
+    get:
+      tags:
+        - Locations
+      summary: List states
+      operationId: getstates
+      security:
+        - bearerAuth: []
+      description: Requires permission `service-area:read`.
+      responses:
+        "200":
+          description: Success
+          content:
+            application/json:
+              schema: *a1
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+  /locations:
+    get:
+      tags:
+        - Locations
+      summary: List own saved locations
+      operationId: getlocations
+      security:
+        - bearerAuth: []
+      description: Requires permission `location:read:own`.
+      responses:
+        "200":
+          description: Success
+          content:
+            application/json:
+              schema: *a1
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+    post:
+      tags:
+        - Locations
+      summary: Save a location
+      operationId: postlocations
+      security:
+        - bearerAuth: []
+      description: Requires permission `location:manage:own`.
+      requestBody:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/LocationCreateRequest"
+        required: true
+      responses:
+        "201":
+          description: Created
+          content:
+            application/json:
+              schema: *a1
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "422":
+          $ref: "#/components/responses/ValidationError"
+  /locations/{id}:
+    get:
+      tags:
+        - Locations
+      summary: Get an own location
+      operationId: getlocations_id
+      security:
+        - bearerAuth: []
+      description: Requires permission `location:read:own`.
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+          description: id path parameter.
+      responses:
+        "200":
+          description: Success
+          content:
+            application/json:
+              schema: *a1
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "404":
+          $ref: "#/components/responses/NotFound"
+    patch:
+      tags:
+        - Locations
+      summary: Update an own location
+      operationId: patchlocations_id
+      security:
+        - bearerAuth: []
+      description: Requires permission `location:manage:own`.
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+          description: id path parameter.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: true
+              description: JSON request body. See the endpoint summary and docs/API.md for fields.
+      responses:
+        "200":
+          description: Success
+          content:
+            application/json:
+              schema: *a1
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "422":
+          $ref: "#/components/responses/ValidationError"
+    delete:
+      tags:
+        - Locations
+      summary: Remove an own location
+      operationId: deletelocations_id
+      security:
+        - bearerAuth: []
+      description: Requires permission `location:manage:own`.
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+          description: id path parameter.
+      responses:
+        "200":
+          description: Success
+          content:
+            application/json:
+              schema: *a1
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "404":
+          $ref: "#/components/responses/NotFound"
+  /locations/{id}/primary:
+    post:
+      tags:
+        - Locations
+      summary: Set the primary location
+      operationId: postlocations_id_primary
+      security:
+        - bearerAuth: []
+      description: Requires permission `location:manage:own`.
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+          description: id path parameter.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: true
+              description: JSON request body. See the endpoint summary and docs/API.md for fields.
+      responses:
+        "200":
+          description: Success
+          content:
+            application/json:
+              schema: *a1
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "422":
+          $ref: "#/components/responses/ValidationError"
+  /locations/coverage:
+    get:
+      tags:
+        - Locations
+      summary: Check coverage for a coordinate
+      operationId: getlocations_coverage
+      security:
+        - bearerAuth: []
+      description: Requires permission `location:read:own`.
+      responses:
+        "200":
+          description: Success
+          content:
+            application/json:
+              schema: *a1
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+  /locations/distance:
+    get:
+      tags:
+        - Locations
+      summary: Server-computed distance
+      operationId: getlocations_distance
+      security:
+        - bearerAuth: []
+      description: Requires permission `location:read:own`.
+      responses:
+        "200":
+          description: Success
+          content:
+            application/json:
+              schema: *a1
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+  /locations/reverse-geocode:
+    get:
+      tags:
+        - Locations
+      summary: Coordinate → address
+      operationId: getlocations_reverse_geocode
+      security:
+        - bearerAuth: []
+      description: Requires permission `location:read:own`.
+      responses:
+        "200":
+          description: Success
+          content:
+            application/json:
+              schema: *a1
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+  /locations/search:
+    get:
+      tags:
+        - Locations
+      summary: Address → coordinates
+      operationId: getlocations_search
+      security:
+        - bearerAuth: []
+      description: Requires permission `location:read:own`.
+      responses:
+        "200":
+          description: Success
+          content:
+            application/json:
+              schema: *a1
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+  /ambulances:
+    get:
+      tags:
+        - Locations
+      summary: Ranked hospitals + nearby providers (**requires /**)
+      operationId: getambulances
+      security: []
+      description: Requires permission `lat`.
+      responses:
+        "200":
+          description: Success
+          content:
+            application/json:
+              schema: *a1
+  /bookings:
+    post:
+      tags:
+        - Bookings
+      summary: Create an emergency request
+      operationId: postbookings
+      security:
+        - bearerAuth: []
+      description: Requires permission `booking:create`.
+      requestBody:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/BookingCreateRequest"
+        required: true
+      responses:
+        "201":
+          description: Created
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  success:
+                    type: boolean
+                  booking:
+                    $ref: "#/components/schemas/Booking"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "422":
+          $ref: "#/components/responses/ValidationError"
+    get:
+      tags:
+        - Bookings
+      summary: List bookings (scoped to your role)
+      operationId: getbookings
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: "#/components/parameters/Page"
+        - $ref: "#/components/parameters/Limit"
+      responses:
+        "200":
+          description: Success
+          content:
+            application/json:
+              schema: *a1
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+  /bookings/{id}:
+    get:
+      tags:
+        - Bookings
+      summary: Get a booking (ownership/scope enforced)
+      operationId: getbookings_id
+      security:
+        - bearerAuth: []
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+          description: id path parameter.
+      responses:
+        "200":
+          description: Success
+          content:
+            application/json:
+              schema: *a1
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "404":
+          $ref: "#/components/responses/NotFound"
+  /bookings/{id}/history:
+    get:
+      tags:
+        - Bookings
+      summary: Append-only status history (scoped)
+      operationId: getbookings_id_history
+      security:
+        - bearerAuth: []
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+          description: id path parameter.
+      responses:
+        "200":
+          description: Success
+          content:
+            application/json:
+              schema: *a1
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "404":
+          $ref: "#/components/responses/NotFound"
+  /bookings/{id}/status:
+    patch:
+      tags:
+        - Bookings
+      summary: Advance booking status
+      operationId: patchbookings_id_status
+      security:
+        - bearerAuth: []
+      description: Requires permission `booking:update:status`.
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+          description: id path parameter.
+      requestBody:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/BookingStatusUpdateRequest"
+        required: true
+      responses:
+        "200":
+          description: Success
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  success:
+                    type: boolean
+                  booking:
+                    $ref: "#/components/schemas/Booking"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "422":
+          $ref: "#/components/responses/ValidationError"
+  /bookings/{id}/cancel:
+    post:
+      tags:
+        - Bookings
+      summary: Cancel a request ( or operator)
+      operationId: postbookings_id_cancel
+      security:
+        - bearerAuth: []
+      description: Requires permission `booking:cancel:own`.
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+          description: id path parameter.
+      requestBody:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/OptionalReasonRequest"
+        required: true
+      responses:
+        "200":
+          description: Success
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  success:
+                    type: boolean
+                  booking:
+                    $ref: "#/components/schemas/Booking"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "422":
+          $ref: "#/components/responses/ValidationError"
+  /bookings/{id}/dispatch/candidates:
+    get:
+      tags:
+        - Bookings
+      summary: Ranked dispatch candidates
+      operationId: getbookings_id_dispatch_candidates
+      security:
+        - bearerAuth: []
+      description: Requires permission `dispatch:manage`.
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+          description: id path parameter.
+      responses:
+        "200":
+          description: Success
+          content:
+            application/json:
+              schema: *a1
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "404":
+          $ref: "#/components/responses/NotFound"
+  /bookings/{id}/dispatch:
+    post:
+      tags:
+        - Bookings
+      summary: Start/restart dispatch → offers
+      operationId: postbookings_id_dispatch
+      security:
+        - bearerAuth: []
+      description: Requires permission `dispatch:manage`.
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+          description: id path parameter.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: true
+              description: JSON request body. See the endpoint summary and docs/API.md for fields.
+      responses:
+        "200":
+          description: Success
+          content:
+            application/json:
+              schema: *a1
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "422":
+          $ref: "#/components/responses/ValidationError"
+  /bookings/{id}/dispatch/retry:
+    post:
+      tags:
+        - Bookings
+      summary: Retry with the next candidates
+      operationId: postbookings_id_dispatch_retry
+      security:
+        - bearerAuth: []
+      description: Requires permission `dispatch:manage`.
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+          description: id path parameter.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: true
+              description: JSON request body. See the endpoint summary and docs/API.md for fields.
+      responses:
+        "200":
+          description: Success
+          content:
+            application/json:
+              schema: *a1
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "422":
+          $ref: "#/components/responses/ValidationError"
+  /bookings/{id}/offers:
+    get:
+      tags:
+        - Bookings
+      summary: Offers for a booking
+      operationId: getbookings_id_offers
+      security:
+        - bearerAuth: []
+      description: Requires permission `dispatch:manage`.
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+          description: id path parameter.
+      responses:
+        "200":
+          description: Success
+          content:
+            application/json:
+              schema: *a1
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "404":
+          $ref: "#/components/responses/NotFound"
+  /bookings/{id}/assign:
+    post:
+      tags:
+        - Bookings
+      summary: Manual assign / reassign override
+      operationId: postbookings_id_assign
+      security:
+        - bearerAuth: []
+      description: Requires permission `dispatch:manage`.
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+          description: id path parameter.
+      requestBody:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/DispatchAssignRequest"
+        required: true
+      responses:
+        "200":
+          description: Success
+          content:
+            application/json:
+              schema: *a1
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "422":
+          $ref: "#/components/responses/ValidationError"
+  /bookings/{id}/tracking:
+    get:
+      tags:
+        - Bookings
+      summary: Last-known position + ETA ( /
+      operationId: getbookings_id_tracking
+      security:
+        - bearerAuth: []
+      description: Requires permission `tracking:read:own`.
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+          description: id path parameter.
+      responses:
+        "200":
+          description: Success
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  success:
+                    type: boolean
+                  tracking:
+                    type: object
+                    additionalProperties: true
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "404":
+          $ref: "#/components/responses/NotFound"
+  /bookings/{id}/tracking/requester-location:
+    post:
+      tags:
+        - Bookings
+      summary: Share a moving-pickup GPS fix
+      operationId: postbookings_id_tracking_requester_location
+      security:
+        - bearerAuth: []
+      description: Requires permission `tracking:share:own`.
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+          description: id path parameter.
+      requestBody:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/TripLocationRequest"
+        required: true
+      responses:
+        "201":
+          description: Created
+          content:
+            application/json:
+              schema: *a1
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "422":
+          $ref: "#/components/responses/ValidationError"
+  /dispatch/offers/me:
+    get:
+      tags:
+        - Dispatch
+      summary: Own live dispatch offers
+      operationId: getdispatch_offers_me
+      security:
+        - bearerAuth: []
+      description: Requires permission `dispatch:read:own`.
+      responses:
+        "200":
+          description: Success
+          content:
+            application/json:
+              schema: *a1
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+  /dispatch/offers/{id}/accept:
+    post:
+      tags:
+        - Dispatch
+      summary: Accept an own offer
+      operationId: postdispatch_offers_id_accept
+      security:
+        - bearerAuth: []
+      description: Requires permission `dispatch:respond`.
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+          description: id path parameter.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: true
+              description: JSON request body. See the endpoint summary and docs/API.md for fields.
+      responses:
+        "200":
+          description: Success
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  success:
+                    type: boolean
+                  booking:
+                    $ref: "#/components/schemas/Booking"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "422":
+          $ref: "#/components/responses/ValidationError"
+  /dispatch/offers/{id}/reject:
+    post:
+      tags:
+        - Dispatch
+      summary: Decline an own offer
+      operationId: postdispatch_offers_id_reject
+      security:
+        - bearerAuth: []
+      description: Requires permission `dispatch:respond`.
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+          description: id path parameter.
+      requestBody:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/OptionalReasonRequest"
+        required: true
+      responses:
+        "200":
+          description: Success
+          content:
+            application/json:
+              schema: *a1
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "422":
+          $ref: "#/components/responses/ValidationError"
+  /dispatch/bookings:
+    get:
+      tags:
+        - Dispatch
+      summary: Dispatcher incoming/operational queue
+      operationId: getdispatch_bookings
+      security:
+        - bearerAuth: []
+      description: Requires permission `dispatch:manage`.
+      responses:
+        "200":
+          description: Success
+          content:
+            application/json:
+              schema: *a1
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+  /dispatch/ambulances:
+    get:
+      tags:
+        - Dispatch
+      summary: Available ambulances + crew in scope
+      operationId: getdispatch_ambulances
+      security:
+        - bearerAuth: []
+      description: Requires permission `dispatch:manage`.
+      responses:
+        "200":
+          description: Success
+          content:
+            application/json:
+              schema: *a1
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+  /dispatch/bookings/{id}:
+    get:
+      tags:
+        - Dispatch
+      summary: Booking + status trail + offers + trip history + ETA
+      operationId: getdispatch_bookings_id
+      security:
+        - bearerAuth: []
+      description: Requires permission `dispatch:manage`.
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+          description: id path parameter.
+      responses:
+        "200":
+          description: Success
+          content:
+            application/json:
+              schema: *a1
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "404":
+          $ref: "#/components/responses/NotFound"
+  /dispatch/bookings/{id}/escalate:
+    post:
+      tags:
+        - Dispatch
+      summary: Escalate for manual assignment
+      operationId: postdispatch_bookings_id_escalate
+      security:
+        - bearerAuth: []
+      description: Requires permission `dispatch:manage`.
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+          description: id path parameter.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: true
+              description: JSON request body. See the endpoint summary and docs/API.md for fields.
+      responses:
+        "200":
+          description: Success
+          content:
+            application/json:
+              schema: *a1
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "422":
+          $ref: "#/components/responses/ValidationError"
+  /dispatch/bookings/{id}/contact:
+    post:
+      tags:
+        - Dispatch
+      summary: Contact a party via an approved template
+      operationId: postdispatch_bookings_id_contact
+      security:
+        - bearerAuth: []
+      description: Requires permission `dispatch:contact`.
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+          description: id path parameter.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: true
+              description: JSON request body. See the endpoint summary and docs/API.md for fields.
+      responses:
+        "200":
+          description: Success
+          content:
+            application/json:
+              schema: *a1
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "422":
+          $ref: "#/components/responses/ValidationError"
+  /crew/me/trips:
+    get:
+      tags:
+        - Trips
+      summary: Crew's assigned trips
+      operationId: getcrew_me_trips
+      security:
+        - bearerAuth: []
+      description: Requires permission `trip:read:own`.
+      responses:
+        "200":
+          description: Success
+          content:
+            application/json:
+              schema: *a1
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+  /crew/me/trips/{id}:
+    get:
+      tags:
+        - Trips
+      summary: One assigned trip
+      operationId: getcrew_me_trips_id
+      security:
+        - bearerAuth: []
+      description: Requires permission `trip:read:own`.
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+          description: id path parameter.
+      responses:
+        "200":
+          description: Success
+          content:
+            application/json:
+              schema: *a1
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "404":
+          $ref: "#/components/responses/NotFound"
+  /crew/me/trips/{id}/status:
+    patch:
+      tags:
+        - Trips
+      summary: Advance the trip
+      operationId: patchcrew_me_trips_id_status
+      security:
+        - bearerAuth: []
+      description: Requires permission `trip:update`.
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+          description: id path parameter.
+      requestBody:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/TripStatusRequest"
+        required: true
+      responses:
+        "200":
+          description: Success
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  success:
+                    type: boolean
+                  trip:
+                    $ref: "#/components/schemas/Booking"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "422":
+          $ref: "#/components/responses/ValidationError"
+  /crew/me/trips/{id}/location:
+    post:
+      tags:
+        - Trips
+      summary: Record a trip GPS fix
+      operationId: postcrew_me_trips_id_location
+      security:
+        - bearerAuth: []
+      description: Requires permission `tracking:update`.
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+          description: id path parameter.
+      requestBody:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/TripLocationRequest"
+        required: true
+      responses:
+        "201":
+          description: Created
+          content:
+            application/json:
+              schema: *a1
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "422":
+          $ref: "#/components/responses/ValidationError"
+  /crew/me/trips/{id}/no-show:
+    post:
+      tags:
+        - Trips
+      summary: Report a patient no-show
+      operationId: postcrew_me_trips_id_no_show
+      security:
+        - bearerAuth: []
+      description: Requires permission `trip:update`.
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+          description: id path parameter.
+      requestBody:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/ReasonRequest"
+        required: true
+      responses:
+        "200":
+          description: Success
+          content:
+            application/json:
+              schema: *a1
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "422":
+          $ref: "#/components/responses/ValidationError"
+  /hospitals:
+    get:
+      tags:
+        - Hospitals
+      summary: Hospital directory (reference data)
+      operationId: gethospitals
+      security:
+        - bearerAuth: []
+      responses:
+        "200":
+          description: Success
+          content:
+            application/json:
+              schema: *a1
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+  /hospitals/{id}:
+    get:
+      tags:
+        - Hospitals
+      summary: One hospital profile (reference data)
+      operationId: gethospitals_id
+      security:
+        - bearerAuth: []
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+          description: id path parameter.
+      responses:
+        "200":
+          description: Success
+          content:
+            application/json:
+              schema: *a1
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "404":
+          $ref: "#/components/responses/NotFound"
+  /hospitals/me:
+    get:
+      tags:
+        - Hospitals
+      summary: Own hospital + maintained lists
+      operationId: gethospitals_me
+      security:
+        - bearerAuth: []
+      description: Requires permission `hospital:profile:read`.
+      responses:
+        "200":
+          description: Success
+          content:
+            application/json:
+              schema: *a1
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+    patch:
+      tags:
+        - Hospitals
+      summary: Update own profile/location
+      operationId: patchhospitals_me
+      security:
+        - bearerAuth: []
+      description: Requires permission `hospital:profile:manage`.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: true
+              description: JSON request body. See the endpoint summary and docs/API.md for fields.
+      responses:
+        "200":
+          description: Success
+          content:
+            application/json:
+              schema: *a1
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "422":
+          $ref: "#/components/responses/ValidationError"
+  /hospitals/me/specialties:
+    get:
+      tags:
+        - Hospitals
+      summary: Own specialties
+      operationId: gethospitals_me_specialties
+      security:
+        - bearerAuth: []
+      description: Requires permission `hospital:profile:read`.
+      responses:
+        "200":
+          description: Success
+          content:
+            application/json:
+              schema: *a1
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+    put:
+      tags:
+        - Hospitals
+      summary: Replace own specialties
+      operationId: puthospitals_me_specialties
+      security:
+        - bearerAuth: []
+      description: Requires permission `hospital:profile:manage`.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: true
+              description: JSON request body. See the endpoint summary and docs/API.md for fields.
+      responses:
+        "200":
+          description: Success
+          content:
+            application/json:
+              schema: *a1
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "422":
+          $ref: "#/components/responses/ValidationError"
+  /hospitals/me/services:
+    get:
+      tags:
+        - Hospitals
+      summary: Own service availability
+      operationId: gethospitals_me_services
+      security:
+        - bearerAuth: []
+      description: Requires permission `hospital:profile:read`.
+      responses:
+        "200":
+          description: Success
+          content:
+            application/json:
+              schema: *a1
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+    put:
+      tags:
+        - Hospitals
+      summary: Replace own service availability
+      operationId: puthospitals_me_services
+      security:
+        - bearerAuth: []
+      description: Requires permission `hospital:profile:manage`.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: true
+              description: JSON request body. See the endpoint summary and docs/API.md for fields.
+      responses:
+        "200":
+          description: Success
+          content:
+            application/json:
+              schema: *a1
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "422":
+          $ref: "#/components/responses/ValidationError"
+  /hospitals/me/capacity:
+    get:
+      tags:
+        - Hospitals
+      summary: Own self-reported capacity/intake
+      operationId: gethospitals_me_capacity
+      security:
+        - bearerAuth: []
+      description: Requires permission `hospital:profile:read`.
+      responses:
+        "200":
+          description: Success
+          content:
+            application/json:
+              schema: *a1
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+    patch:
+      tags:
+        - Hospitals
+      summary: Maintain own capacity/intake
+      operationId: patchhospitals_me_capacity
+      security:
+        - bearerAuth: []
+      description: Requires permission `hospital:profile:manage`.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: true
+              description: JSON request body. See the endpoint summary and docs/API.md for fields.
+      responses:
+        "200":
+          description: Success
+          content:
+            application/json:
+              schema: *a1
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "422":
+          $ref: "#/components/responses/ValidationError"
+  /hospitals/me/staff:
+    get:
+      tags:
+        - Hospitals
+      summary: Own authorized staff
+      operationId: gethospitals_me_staff
+      security:
+        - bearerAuth: []
+      description: Requires permission `hospital:staff:manage`.
+      responses:
+        "200":
+          description: Success
+          content:
+            application/json:
+              schema: *a1
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+    post:
+      tags:
+        - Hospitals
+      summary: Authorize a staff account
+      operationId: posthospitals_me_staff
+      security:
+        - bearerAuth: []
+      description: Requires permission `hospital:staff:manage`.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: true
+              description: JSON request body. See the endpoint summary and docs/API.md for fields.
+      responses:
+        "200":
+          description: Success
+          content:
+            application/json:
+              schema: *a1
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "422":
+          $ref: "#/components/responses/ValidationError"
+  /hospitals/me/staff/{id}:
+    delete:
+      tags:
+        - Hospitals
+      summary: Revoke a staff account
+      operationId: deletehospitals_me_staff_id
+      security:
+        - bearerAuth: []
+      description: Requires permission `hospital:staff:manage`.
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+          description: id path parameter.
+      responses:
+        "200":
+          description: Success
+          content:
+            application/json:
+              schema: *a1
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "404":
+          $ref: "#/components/responses/NotFound"
+  /hospitals/me/incoming:
+    get:
+      tags:
+        - Hospitals
+      summary: Inbound patient alerts + ETA
+      operationId: gethospitals_me_incoming
+      security:
+        - bearerAuth: []
+      description: Requires permission `booking:read:hospital`.
+      responses:
+        "200":
+          description: Success
+          content:
+            application/json:
+              schema: *a1
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+  /trips/history:
+    get:
+      tags:
+        - Quality
+      summary: Consolidated trip history, paginated (scoped)
+      operationId: gettrips_history
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: "#/components/parameters/Page"
+        - $ref: "#/components/parameters/Limit"
+      responses:
+        "200":
+          description: Success
+          content:
+            application/json:
+              schema: *a1
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+  /trips/{id}:
+    get:
+      tags:
+        - Quality
+      summary: One trip + events, payment, receipt, feedback, complaints (scoped)
+      operationId: gettrips_id
+      security:
+        - bearerAuth: []
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+          description: id path parameter.
+      responses:
+        "200":
+          description: Success
+          content:
+            application/json:
+              schema: *a1
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "404":
+          $ref: "#/components/responses/NotFound"
+  /bookings/{id}/feedback:
+    post:
+      tags:
+        - Quality
+      summary: Rate a trip the caller requested
+      operationId: postbookings_id_feedback
+      security:
+        - bearerAuth: []
+      description: Requires permission `feedback:create:own`.
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+          description: id path parameter.
+      requestBody:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/FeedbackRequest"
+        required: true
+      responses:
+        "201":
+          description: Created
+          content:
+            application/json:
+              schema: *a1
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "422":
+          $ref: "#/components/responses/ValidationError"
+    get:
+      tags:
+        - Quality
+      summary: Feedback on a booking (scoped)
+      operationId: getbookings_id_feedback
+      security:
+        - bearerAuth: []
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+          description: id path parameter.
+      responses:
+        "200":
+          description: Success
+          content:
+            application/json:
+              schema: *a1
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "404":
+          $ref: "#/components/responses/NotFound"
+  /feedback:
+    get:
+      tags:
+        - Quality
+      summary: Scoped, paginated feedback (//)
+      operationId: getfeedback
+      security:
+        - bearerAuth: []
+      description: Requires permission `feedback:read:own`.
+      parameters:
+        - $ref: "#/components/parameters/Page"
+        - $ref: "#/components/parameters/Limit"
+      responses:
+        "200":
+          description: Success
+          content:
+            application/json:
+              schema: *a1
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+  /feedback/{id}:
+    get:
+      tags:
+        - Quality
+      summary: One feedback record (scoped)
+      operationId: getfeedback_id
+      security:
+        - bearerAuth: []
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+          description: id path parameter.
+      responses:
+        "200":
+          description: Success
+          content:
+            application/json:
+              schema: *a1
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "404":
+          $ref: "#/components/responses/NotFound"
+  /complaints:
+    post:
+      tags:
+        - Quality
+      summary: Raise a complaint
+      operationId: postcomplaints
+      security:
+        - bearerAuth: []
+      description: Requires permission `complaint:create:own`.
+      requestBody:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/ComplaintCreateRequest"
+        required: true
+      responses:
+        "201":
+          description: Created
+          content:
+            application/json:
+              schema: *a1
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "422":
+          $ref: "#/components/responses/ValidationError"
+    get:
+      tags:
+        - Quality
+      summary: Own/scoped complaints, paginated (/)
+      operationId: getcomplaints
+      security:
+        - bearerAuth: []
+      description: Requires permission `complaint:read:own`.
+      parameters:
+        - $ref: "#/components/parameters/Page"
+        - $ref: "#/components/parameters/Limit"
+      responses:
+        "200":
+          description: Success
+          content:
+            application/json:
+              schema: *a1
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+  /complaints/{id}:
+    get:
+      tags:
+        - Quality
+      summary: One complaint + handling trail (scoped)
+      operationId: getcomplaints_id
+      security:
+        - bearerAuth: []
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+          description: id path parameter.
+      responses:
+        "200":
+          description: Success
+          content:
+            application/json:
+              schema: *a1
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "404":
+          $ref: "#/components/responses/NotFound"
+  /complaints/{id}/status:
+    patch:
+      tags:
+        - Quality
+      summary: Manage complaint status (, audited)
+      operationId: patchcomplaints_id_status
+      security:
+        - bearerAuth: []
+      description: Requires permission `complaint:manage`.
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+          description: id path parameter.
+      requestBody:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/ComplaintStatusRequest"
+        required: true
+      responses:
+        "200":
+          description: Success
+          content:
+            application/json:
+              schema: *a1
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "422":
+          $ref: "#/components/responses/ValidationError"
+  /pricing/estimate:
+    post:
+      tags:
+        - Pricing
+      summary: Server-computed fare estimate
+      operationId: postpricing_estimate
+      security:
+        - bearerAuth: []
+      description: Requires permission `pricing:estimate`.
+      requestBody:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/EstimateRequest"
+        required: true
+      responses:
+        "200":
+          description: Success
+          content:
+            application/json:
+              schema: *a1
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "422":
+          $ref: "#/components/responses/ValidationError"
+  /admin/pricing:
+    get:
+      tags:
+        - Pricing
+      summary: List pricing rules
+      operationId: getadmin_pricing
+      security:
+        - bearerAuth: []
+      description: Requires permission `pricing:read`.
+      responses:
+        "200":
+          description: Success
+          content:
+            application/json:
+              schema: *a1
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+    post:
+      tags:
+        - Pricing
+      summary: Create a pricing rule
+      operationId: postadmin_pricing
+      security:
+        - bearerAuth: []
+      description: Requires permission `pricing:manage`.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: true
+              description: JSON request body. See the endpoint summary and docs/API.md for fields.
+      responses:
+        "200":
+          description: Success
+          content:
+            application/json:
+              schema: *a1
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "422":
+          $ref: "#/components/responses/ValidationError"
+  /admin/pricing/{id}:
+    get:
+      tags:
+        - Pricing
+      summary: One pricing rule
+      operationId: getadmin_pricing_id
+      security:
+        - bearerAuth: []
+      description: Requires permission `pricing:read`.
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+          description: id path parameter.
+      responses:
+        "200":
+          description: Success
+          content:
+            application/json:
+              schema: *a1
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "404":
+          $ref: "#/components/responses/NotFound"
+    patch:
+      tags:
+        - Pricing
+      summary: Update a pricing rule
+      operationId: patchadmin_pricing_id
+      security:
+        - bearerAuth: []
+      description: Requires permission `pricing:manage`.
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+          description: id path parameter.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: true
+              description: JSON request body. See the endpoint summary and docs/API.md for fields.
+      responses:
+        "200":
+          description: Success
+          content:
+            application/json:
+              schema: *a1
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "422":
+          $ref: "#/components/responses/ValidationError"
+  /admin/pricing/{id}/status:
+    patch:
+      tags:
+        - Pricing
+      summary: Activate/deactivate a rule
+      operationId: patchadmin_pricing_id_status
+      security:
+        - bearerAuth: []
+      description: Requires permission `pricing:manage`.
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+          description: id path parameter.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: true
+              description: JSON request body. See the endpoint summary and docs/API.md for fields.
+      responses:
+        "200":
+          description: Success
+          content:
+            application/json:
+              schema: *a1
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "422":
+          $ref: "#/components/responses/ValidationError"
+  /payments/initialize:
+    post:
+      tags:
+        - Payments
+      summary: Start a payment
+      operationId: postpayments_initialize
+      security:
+        - bearerAuth: []
+      description: Requires permission `payment:initiate`.
+      requestBody:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/PaymentInitializeRequest"
+        required: true
+      responses:
+        "200":
+          description: Success
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  success:
+                    type: boolean
+                  payment:
+                    $ref: "#/components/schemas/Payment"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "422":
+          $ref: "#/components/responses/ValidationError"
+  /payments/cancel:
+    post:
+      tags:
+        - Payments
+      summary: Cancel a payment
+      operationId: postpayments_cancel
+      security: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: true
+              description: JSON request body. See the endpoint summary and docs/API.md for fields.
+      responses:
+        "200":
+          description: Success
+          content:
+            application/json:
+              schema: *a1
+        "422":
+          $ref: "#/components/responses/ValidationError"
+  /payments/verify:
+    post:
+      tags:
+        - Payments
+      summary: Verify with provider + settle
+      operationId: postpayments_verify
+      security: []
+      requestBody:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/PaymentVerifyRequest"
+        required: true
+      responses:
+        "200":
+          description: Success
+          content:
+            application/json:
+              schema: *a1
+        "422":
+          $ref: "#/components/responses/ValidationError"
+  /payments/webhook:
+    post:
+      tags:
+        - Payments
+      summary: Provider callback (idempotent, signature-checked)
+      operationId: postpayments_webhook
+      security: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: true
+              description: JSON request body. See the endpoint summary and docs/API.md for fields.
+      responses:
+        "200":
+          description: Success
+          content:
+            application/json:
+              schema: *a1
+        "422":
+          $ref: "#/components/responses/ValidationError"
+  /payments/callback:
+    get:
+      tags:
+        - Payments
+      summary: Browser redirect target from checkout
+      operationId: getpayments_callback
+      security: []
+      responses:
+        "200":
+          description: Success
+          content:
+            application/json:
+              schema: *a1
+  /payments/history:
+    get:
+      tags:
+        - Payments
+      summary: Own payment history
+      operationId: getpayments_history
+      security:
+        - bearerAuth: []
+      description: Requires permission `payment:read:own`.
+      parameters:
+        - $ref: "#/components/parameters/Page"
+        - $ref: "#/components/parameters/Limit"
+      responses:
+        "200":
+          description: Success
+          content:
+            application/json:
+              schema: *a1
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+  /payments/{id}:
+    get:
+      tags:
+        - Payments
+      summary: One payment + timeline
+      operationId: getpayments_id
+      security:
+        - bearerAuth: []
+      description: Requires permission `payment:read:own`.
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+          description: id path parameter.
+      responses:
+        "200":
+          description: Success
+          content:
+            application/json:
+              schema: *a1
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "404":
+          $ref: "#/components/responses/NotFound"
+  /payments/{id}/receipt:
+    get:
+      tags:
+        - Payments
+      summary: Issue/fetch a receipt
+      operationId: getpayments_id_receipt
+      security:
+        - bearerAuth: []
+      description: Requires permission `payment:read:own`.
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+          description: id path parameter.
+      responses:
+        "200":
+          description: Success
+          content:
+            application/json:
+              schema: *a1
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "404":
+          $ref: "#/components/responses/NotFound"
+  /payments/{id}/refund:
+    post:
+      tags:
+        - Payments
+      summary: Refund a settled payment
+      operationId: postpayments_id_refund
+      security:
+        - bearerAuth: []
+      description: Requires permission `payment:refund`.
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+          description: id path parameter.
+      requestBody:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/RefundRequest"
+        required: true
+      responses:
+        "200":
+          description: Success
+          content:
+            application/json:
+              schema: *a1
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "422":
+          $ref: "#/components/responses/ValidationError"
+  /payments/cash:
+    post:
+      tags:
+        - Payments
+      summary: Crew records cash collected
+      operationId: postpayments_cash
+      security:
+        - bearerAuth: []
+      description: Requires permission `payment:collect:cash`.
+      requestBody:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/CashPaymentRequest"
+        required: true
+      responses:
+        "200":
+          description: Success
+          content:
+            application/json:
+              schema: *a1
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "422":
+          $ref: "#/components/responses/ValidationError"
+  /payments/retry:
+    post:
+      tags:
+        - Payments
+      summary: Retry a failed payment
+      operationId: postpayments_retry
+      security:
+        - bearerAuth: []
+      description: Requires permission `payment:retry:own`.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: true
+              description: JSON request body. See the endpoint summary and docs/API.md for fields.
+      responses:
+        "200":
+          description: Success
+          content:
+            application/json:
+              schema: *a1
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "422":
+          $ref: "#/components/responses/ValidationError"
+  /payments/pay-with-wallet:
+    post:
+      tags:
+        - Payments
+      summary: Pay a booking from wallet
+      operationId: postpayments_pay_with_wallet
+      security:
+        - bearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: true
+              description: JSON request body. See the endpoint summary and docs/API.md for fields.
+      responses:
+        "200":
+          description: Success
+          content:
+            application/json:
+              schema: *a1
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "422":
+          $ref: "#/components/responses/ValidationError"
+  /admin/payments:
+    get:
+      tags:
+        - Payments
+      summary: Payment oversight, paginated + state-scoped
+      operationId: getadmin_payments
+      security:
+        - bearerAuth: []
+      description: Requires permission `payment:read:all`.
+      parameters:
+        - $ref: "#/components/parameters/Page"
+        - $ref: "#/components/parameters/Limit"
+      responses:
+        "200":
+          description: Success
+          content:
+            application/json:
+              schema: *a1
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+  /wallet/balance:
+    get:
+      tags:
+        - Payments
+      summary: Wallet balance
+      operationId: getwallet_balance
+      security:
+        - bearerAuth: []
+      responses:
+        "200":
+          description: Success
+          content:
+            application/json:
+              schema: *a1
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+  /wallet/fund:
+    post:
+      tags:
+        - Payments
+      summary: Fund wallet via Interswitch
+      operationId: postwallet_fund
+      security:
+        - bearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: true
+              description: JSON request body. See the endpoint summary and docs/API.md for fields.
+      responses:
+        "200":
+          description: Success
+          content:
+            application/json:
+              schema: *a1
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "422":
+          $ref: "#/components/responses/ValidationError"
+  /savings:
+    get:
+      tags:
+        - Payments
+      summary: Savings goals
+      operationId: getsavings
+      security:
+        - bearerAuth: []
+      responses:
+        "200":
+          description: Success
+          content:
+            application/json:
+              schema: *a1
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+  /insurance/eligibility:
+    post:
+      tags:
+        - Payments
+      summary: HMO eligibility check
+      operationId: postinsurance_eligibility
+      security: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: true
+              description: JSON request body. See the endpoint summary and docs/API.md for fields.
+      responses:
+        "200":
+          description: Success
+          content:
+            application/json:
+              schema: *a1
+        "422":
+          $ref: "#/components/responses/ValidationError"
+  /notifications:
+    get:
+      tags:
+        - Notifications
+      summary: Own notification feed
+      operationId: getnotifications
+      security:
+        - bearerAuth: []
+      description: Requires permission `notification:read:own`.
+      responses:
+        "200":
+          description: Success
+          content:
+            application/json:
+              schema: *a1
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+  /notifications/{id}:
+    get:
+      tags:
+        - Notifications
+      summary: One own notification + delivery log
+      operationId: getnotifications_id
+      security:
+        - bearerAuth: []
+      description: Requires permission `notification:read:own`.
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+          description: id path parameter.
+      responses:
+        "200":
+          description: Success
+          content:
+            application/json:
+              schema: *a1
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "404":
+          $ref: "#/components/responses/NotFound"
+  /admin/notifications:
+    get:
+      tags:
+        - Notifications
+      summary: List the whole queue
+      operationId: getadmin_notifications
+      security:
+        - bearerAuth: []
+      description: Requires permission `notification:read:all`.
+      parameters:
+        - $ref: "#/components/parameters/Page"
+        - $ref: "#/components/parameters/Limit"
+      responses:
+        "200":
+          description: Success
+          content:
+            application/json:
+              schema: *a1
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+  /admin/notifications/stats:
+    get:
+      tags:
+        - Notifications
+      summary: Queue counts by status
+      operationId: getadmin_notifications_stats
+      security:
+        - bearerAuth: []
+      description: Requires permission `notification:read:all`.
+      responses:
+        "200":
+          description: Success
+          content:
+            application/json:
+              schema: *a1
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+  /admin/notifications/{id}:
+    get:
+      tags:
+        - Notifications
+      summary: One notification + delivery log
+      operationId: getadmin_notifications_id
+      security:
+        - bearerAuth: []
+      description: Requires permission `notification:read:all`.
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+          description: id path parameter.
+      responses:
+        "200":
+          description: Success
+          content:
+            application/json:
+              schema: *a1
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "404":
+          $ref: "#/components/responses/NotFound"
+  /admin/notifications/{id}/retry:
+    post:
+      tags:
+        - Notifications
+      summary: Requeue a failed notification
+      operationId: postadmin_notifications_id_retry
+      security:
+        - bearerAuth: []
+      description: Requires permission `notification:manage`.
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+          description: id path parameter.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: true
+              description: JSON request body. See the endpoint summary and docs/API.md for fields.
+      responses:
+        "200":
+          description: Success
+          content:
+            application/json:
+              schema: *a1
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "422":
+          $ref: "#/components/responses/ValidationError"
+  /admin/notifications/{id}/cancel:
+    post:
+      tags:
+        - Notifications
+      summary: Cancel a pending notification
+      operationId: postadmin_notifications_id_cancel
+      security:
+        - bearerAuth: []
+      description: Requires permission `notification:manage`.
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+          description: id path parameter.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: true
+              description: JSON request body. See the endpoint summary and docs/API.md for fields.
+      responses:
+        "200":
+          description: Success
+          content:
+            application/json:
+              schema: *a1
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "422":
+          $ref: "#/components/responses/ValidationError"
+  /admin/notifications/process:
+    post:
+      tags:
+        - Notifications
+      summary: Force a worker tick
+      operationId: postadmin_notifications_process
+      security:
+        - bearerAuth: []
+      description: Requires permission `notification:manage`.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: true
+              description: JSON request body. See the endpoint summary and docs/API.md for fields.
+      responses:
+        "200":
+          description: Success
+          content:
+            application/json:
+              schema: *a1
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "422":
+          $ref: "#/components/responses/ValidationError"
+  /providers/apply:
+    post:
+      tags:
+        - Providers
+      summary: Register as an ambulance provider
+      operationId: postproviders_apply
+      security:
+        - bearerAuth: []
+      description: Requires permission `provider:apply`.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: true
+              description: JSON request body. See the endpoint summary and docs/API.md for fields.
+      responses:
+        "200":
+          description: Success
+          content:
+            application/json:
+              schema: *a1
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "422":
+          $ref: "#/components/responses/ValidationError"
+  /providers/me:
+    get:
+      tags:
+        - Providers
+      summary: Own provider profile
+      operationId: getproviders_me
+      security:
+        - bearerAuth: []
+      description: Requires permission `provider:read:own`.
+      responses:
+        "200":
+          description: Success
+          content:
+            application/json:
+              schema: *a1
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+    patch:
+      tags:
+        - Providers
+      summary: Update own provider profile
+      operationId: patchproviders_me
+      security:
+        - bearerAuth: []
+      description: Requires permission `provider:update:own`.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: true
+              description: JSON request body. See the endpoint summary and docs/API.md for fields.
+      responses:
+        "200":
+          description: Success
+          content:
+            application/json:
+              schema: *a1
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "422":
+          $ref: "#/components/responses/ValidationError"
+  /providers/me/locations:
+    get:
+      tags:
+        - Providers
+      summary: List operating locations
+      operationId: getproviders_me_locations
+      security:
+        - bearerAuth: []
+      description: Requires permission `provider:read:own`.
+      responses:
+        "200":
+          description: Success
+          content:
+            application/json:
+              schema: *a1
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+    post:
+      tags:
+        - Providers
+      summary: Add an operating location
+      operationId: postproviders_me_locations
+      security:
+        - bearerAuth: []
+      description: Requires permission `provider-location:manage`.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: true
+              description: JSON request body. See the endpoint summary and docs/API.md for fields.
+      responses:
+        "200":
+          description: Success
+          content:
+            application/json:
+              schema: *a1
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "422":
+          $ref: "#/components/responses/ValidationError"
+  /providers/me/locations/{id}:
+    patch:
+      tags:
+        - Providers
+      summary: Update an operating location
+      operationId: patchproviders_me_locations_id
+      security:
+        - bearerAuth: []
+      description: Requires permission `provider-location:manage`.
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+          description: id path parameter.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: true
+              description: JSON request body. See the endpoint summary and docs/API.md for fields.
+      responses:
+        "200":
+          description: Success
+          content:
+            application/json:
+              schema: *a1
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "422":
+          $ref: "#/components/responses/ValidationError"
+    delete:
+      tags:
+        - Providers
+      summary: Remove an operating location
+      operationId: deleteproviders_me_locations_id
+      security:
+        - bearerAuth: []
+      description: Requires permission `provider-location:manage`.
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+          description: id path parameter.
+      responses:
+        "200":
+          description: Success
+          content:
+            application/json:
+              schema: *a1
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "404":
+          $ref: "#/components/responses/NotFound"
+  /providers/me/service-areas:
+    get:
+      tags:
+        - Providers
+      summary: List linked service areas
+      operationId: getproviders_me_service_areas
+      security:
+        - bearerAuth: []
+      description: Requires permission `provider:read:own`.
+      responses:
+        "200":
+          description: Success
+          content:
+            application/json:
+              schema: *a1
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+    post:
+      tags:
+        - Providers
+      summary: Link a service area
+      operationId: postproviders_me_service_areas
+      security:
+        - bearerAuth: []
+      description: Requires permission `provider-service-area:manage`.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: true
+              description: JSON request body. See the endpoint summary and docs/API.md for fields.
+      responses:
+        "200":
+          description: Success
+          content:
+            application/json:
+              schema: *a1
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "422":
+          $ref: "#/components/responses/ValidationError"
+  /providers/me/service-areas/{id}:
+    delete:
+      tags:
+        - Providers
+      summary: Unlink a service area
+      operationId: deleteproviders_me_service_areas_id
+      security:
+        - bearerAuth: []
+      description: Requires permission `provider-service-area:manage`.
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+          description: id path parameter.
+      responses:
+        "200":
+          description: Success
+          content:
+            application/json:
+              schema: *a1
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "404":
+          $ref: "#/components/responses/NotFound"
+  /providers/me/ambulances:
+    get:
+      tags:
+        - Providers
+      summary: List own vehicles
+      operationId: getproviders_me_ambulances
+      security:
+        - bearerAuth: []
+      description: Requires permission `ambulance:read:own`.
+      responses:
+        "200":
+          description: Success
+          content:
+            application/json:
+              schema: *a1
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+    post:
+      tags:
+        - Providers
+      summary: Register a vehicle
+      operationId: postproviders_me_ambulances
+      security:
+        - bearerAuth: []
+      description: Requires permission `ambulance:manage`.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: true
+              description: JSON request body. See the endpoint summary and docs/API.md for fields.
+      responses:
+        "200":
+          description: Success
+          content:
+            application/json:
+              schema: *a1
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "422":
+          $ref: "#/components/responses/ValidationError"
+  /providers/me/ambulances/{id}:
+    get:
+      tags:
+        - Providers
+      summary: Get a vehicle
+      operationId: getproviders_me_ambulances_id
+      security:
+        - bearerAuth: []
+      description: Requires permission `ambulance:read:own`.
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+          description: id path parameter.
+      responses:
+        "200":
+          description: Success
+          content:
+            application/json:
+              schema: *a1
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "404":
+          $ref: "#/components/responses/NotFound"
+    patch:
+      tags:
+        - Providers
+      summary: Update a vehicle
+      operationId: patchproviders_me_ambulances_id
+      security:
+        - bearerAuth: []
+      description: Requires permission `ambulance:manage`.
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+          description: id path parameter.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: true
+              description: JSON request body. See the endpoint summary and docs/API.md for fields.
+      responses:
+        "200":
+          description: Success
+          content:
+            application/json:
+              schema: *a1
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "422":
+          $ref: "#/components/responses/ValidationError"
+    delete:
+      tags:
+        - Providers
+      summary: Remove a vehicle
+      operationId: deleteproviders_me_ambulances_id
+      security:
+        - bearerAuth: []
+      description: Requires permission `ambulance:manage`.
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+          description: id path parameter.
+      responses:
+        "200":
+          description: Success
+          content:
+            application/json:
+              schema: *a1
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "404":
+          $ref: "#/components/responses/NotFound"
+  /providers/me/ambulances/{id}/location:
+    post:
+      tags:
+        - Providers
+      summary: Update vehicle location
+      operationId: postproviders_me_ambulances_id_location
+      security:
+        - bearerAuth: []
+      description: Requires permission `ambulance:manage`.
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+          description: id path parameter.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: true
+              description: JSON request body. See the endpoint summary and docs/API.md for fields.
+      responses:
+        "200":
+          description: Success
+          content:
+            application/json:
+              schema: *a1
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "422":
+          $ref: "#/components/responses/ValidationError"
+  /providers/me/ambulances/{id}/availability:
+    post:
+      tags:
+        - Providers
+      summary: Set vehicle availability
+      operationId: postproviders_me_ambulances_id_availability
+      security:
+        - bearerAuth: []
+      description: Requires permission `ambulance:manage`.
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+          description: id path parameter.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: true
+              description: JSON request body. See the endpoint summary and docs/API.md for fields.
+      responses:
+        "200":
+          description: Success
+          content:
+            application/json:
+              schema: *a1
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "422":
+          $ref: "#/components/responses/ValidationError"
+  /providers/me/crew/invitations:
+    get:
+      tags:
+        - Providers
+      summary: List crew invitations
+      operationId: getproviders_me_crew_invitations
+      security:
+        - bearerAuth: []
+      description: Requires permission `crew:read:provider`.
+      responses:
+        "200":
+          description: Success
+          content:
+            application/json:
+              schema: *a1
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+    post:
+      tags:
+        - Providers
+      summary: Invite a crew member
+      operationId: postproviders_me_crew_invitations
+      security:
+        - bearerAuth: []
+      description: Requires permission `crew:manage`.
+      requestBody:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/CrewInviteRequest"
+        required: true
+      responses:
+        "201":
+          description: Created
+          content:
+            application/json:
+              schema: *a1
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "422":
+          $ref: "#/components/responses/ValidationError"
+  /providers/me/crew/invitations/{id}/revoke:
+    post:
+      tags:
+        - Providers
+      summary: Revoke an invitation
+      operationId: postproviders_me_crew_invitations_id_revoke
+      security:
+        - bearerAuth: []
+      description: Requires permission `crew:manage`.
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+          description: id path parameter.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: true
+              description: JSON request body. See the endpoint summary and docs/API.md for fields.
+      responses:
+        "200":
+          description: Success
+          content:
+            application/json:
+              schema: *a1
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "422":
+          $ref: "#/components/responses/ValidationError"
+  /providers/me/crew:
+    get:
+      tags:
+        - Providers
+      summary: List provider crew
+      operationId: getproviders_me_crew
+      security:
+        - bearerAuth: []
+      description: Requires permission `crew:read:provider`.
+      responses:
+        "200":
+          description: Success
+          content:
+            application/json:
+              schema: *a1
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+  /providers/me/crew/{id}/assign:
+    post:
+      tags:
+        - Providers
+      summary: Assign crew to a vehicle
+      operationId: postproviders_me_crew_id_assign
+      security:
+        - bearerAuth: []
+      description: Requires permission `crew:manage`.
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+          description: id path parameter.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: true
+              description: JSON request body. See the endpoint summary and docs/API.md for fields.
+      responses:
+        "200":
+          description: Success
+          content:
+            application/json:
+              schema: *a1
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "422":
+          $ref: "#/components/responses/ValidationError"
+  /providers/me/crew/{id}/deactivate:
+    post:
+      tags:
+        - Providers
+      summary: Deactivate crew immediately
+      operationId: postproviders_me_crew_id_deactivate
+      security:
+        - bearerAuth: []
+      description: Requires permission `crew:manage`.
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+          description: id path parameter.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: true
+              description: JSON request body. See the endpoint summary and docs/API.md for fields.
+      responses:
+        "200":
+          description: Success
+          content:
+            application/json:
+              schema: *a1
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "422":
+          $ref: "#/components/responses/ValidationError"
+  /providers/me/crew/{id}/suspend:
+    post:
+      tags:
+        - Providers
+      summary: Suspend crew
+      operationId: postproviders_me_crew_id_suspend
+      security:
+        - bearerAuth: []
+      description: Requires permission `crew:manage`.
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+          description: id path parameter.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: true
+              description: JSON request body. See the endpoint summary and docs/API.md for fields.
+      responses:
+        "200":
+          description: Success
+          content:
+            application/json:
+              schema: *a1
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "422":
+          $ref: "#/components/responses/ValidationError"
+  /providers/me/crew/{id}/reactivate:
+    post:
+      tags:
+        - Providers
+      summary: Reactivate crew
+      operationId: postproviders_me_crew_id_reactivate
+      security:
+        - bearerAuth: []
+      description: Requires permission `crew:manage`.
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+          description: id path parameter.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: true
+              description: JSON request body. See the endpoint summary and docs/API.md for fields.
+      responses:
+        "200":
+          description: Success
+          content:
+            application/json:
+              schema: *a1
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "422":
+          $ref: "#/components/responses/ValidationError"
+  /crew/invitations/{token}/accept:
+    post:
+      tags:
+        - Providers
+      summary: Accept an invitation
+      operationId: postcrew_invitations_token_accept
+      security:
+        - bearerAuth: []
+      description: Requires permission `crew:self:manage`.
+      parameters:
+        - name: token
+          in: path
+          required: true
+          schema:
+            type: string
+          description: token path parameter.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: true
+              description: JSON request body. See the endpoint summary and docs/API.md for fields.
+      responses:
+        "200":
+          description: Success
+          content:
+            application/json:
+              schema: *a1
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "422":
+          $ref: "#/components/responses/ValidationError"
+  /crew/me:
+    get:
+      tags:
+        - Providers
+      summary: Own crew profile
+      operationId: getcrew_me
+      security:
+        - bearerAuth: []
+      description: Requires permission `crew:read:own`.
+      responses:
+        "200":
+          description: Success
+          content:
+            application/json:
+              schema: *a1
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+    patch:
+      tags:
+        - Providers
+      summary: Update own crew profile
+      operationId: patchcrew_me
+      security:
+        - bearerAuth: []
+      description: Requires permission `crew:self:manage`.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: true
+              description: JSON request body. See the endpoint summary and docs/API.md for fields.
+      responses:
+        "200":
+          description: Success
+          content:
+            application/json:
+              schema: *a1
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "422":
+          $ref: "#/components/responses/ValidationError"
+  /crew/me/availability:
+    post:
+      tags:
+        - Providers
+      summary: Set own availability
+      operationId: postcrew_me_availability
+      security:
+        - bearerAuth: []
+      description: Requires permission `crew:self:manage`.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: true
+              description: JSON request body. See the endpoint summary and docs/API.md for fields.
+      responses:
+        "200":
+          description: Success
+          content:
+            application/json:
+              schema: *a1
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "422":
+          $ref: "#/components/responses/ValidationError"
+  /crew/me/documents:
+    get:
+      tags:
+        - Providers
+      summary: List own documents
+      operationId: getcrew_me_documents
+      security:
+        - bearerAuth: []
+      description: Requires permission `crew:read:own`.
+      responses:
+        "200":
+          description: Success
+          content:
+            application/json:
+              schema: *a1
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+    post:
+      tags:
+        - Providers
+      summary: Submit a document
+      operationId: postcrew_me_documents
+      security:
+        - bearerAuth: []
+      description: Requires permission `crew:self:manage`.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: true
+              description: JSON request body. See the endpoint summary and docs/API.md for fields.
+      responses:
+        "200":
+          description: Success
+          content:
+            application/json:
+              schema: *a1
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "422":
+          $ref: "#/components/responses/ValidationError"
+  /admin/users:
+    get:
+      tags:
+        - Admin
+      summary: List users, state-scoped
+      operationId: getadmin_users
+      security:
+        - bearerAuth: []
+      description: Requires permission `admin:users:read`.
+      parameters:
+        - $ref: "#/components/parameters/Page"
+        - $ref: "#/components/parameters/Limit"
+      responses:
+        "200":
+          description: Success
+          content:
+            application/json:
+              schema: *a1
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+  /admin/users/{id}:
+    get:
+      tags:
+        - Admin
+      summary: Get a user, state-scoped
+      operationId: getadmin_users_id
+      security:
+        - bearerAuth: []
+      description: Requires permission `admin:users:read`.
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+          description: id path parameter.
+      responses:
+        "200":
+          description: Success
+          content:
+            application/json:
+              schema: *a1
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "404":
+          $ref: "#/components/responses/NotFound"
+  /admin/users/{id}/role:
+    patch:
+      tags:
+        - Admin
+      summary: Assign role + scope
+      operationId: patchadmin_users_id_role
+      security:
+        - bearerAuth: []
+      description: Requires permission `admin:roles:assign`.
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+          description: id path parameter.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: true
+              description: JSON request body. See the endpoint summary and docs/API.md for fields.
+      responses:
+        "200":
+          description: Success
+          content:
+            application/json:
+              schema: *a1
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "422":
+          $ref: "#/components/responses/ValidationError"
+  /admin/users/{id}/suspend:
+    post:
+      tags:
+        - Admin
+      summary: Suspend an account + revoke its sessions
+      operationId: postadmin_users_id_suspend
+      security:
+        - bearerAuth: []
+      description: Requires permission `admin:users:manage`.
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+          description: id path parameter.
+      requestBody:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/SuspendRequest"
+        required: true
+      responses:
+        "200":
+          description: Success
+          content:
+            application/json:
+              schema: *a1
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "422":
+          $ref: "#/components/responses/ValidationError"
+  /admin/users/{id}/activate:
+    post:
+      tags:
+        - Admin
+      summary: Re-activate an account
+      operationId: postadmin_users_id_activate
+      security:
+        - bearerAuth: []
+      description: Requires permission `admin:users:manage`.
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+          description: id path parameter.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: true
+              description: JSON request body. See the endpoint summary and docs/API.md for fields.
+      responses:
+        "200":
+          description: Success
+          content:
+            application/json:
+              schema: *a1
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "422":
+          $ref: "#/components/responses/ValidationError"
+  /admin/audit-logs:
+    get:
+      tags:
+        - Admin
+      summary: Read the audit trail, state-scoped
+      operationId: getadmin_audit_logs
+      security:
+        - bearerAuth: []
+      description: Requires permission `admin:audit:read`.
+      parameters:
+        - $ref: "#/components/parameters/Page"
+        - $ref: "#/components/parameters/Limit"
+      responses:
+        "200":
+          description: Success
+          content:
+            application/json:
+              schema: *a1
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+  /admin/reports/overview:
+    get:
+      tags:
+        - Admin
+      summary: Aggregate operational report
+      operationId: getadmin_reports_overview
+      security:
+        - bearerAuth: []
+      description: Requires permission `admin:reports:read`.
+      responses:
+        "200":
+          description: Success
+          content:
+            application/json:
+              schema: *a1
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+  /admin/bookings:
+    get:
+      tags:
+        - Admin
+      summary: Booking oversight, paginated + filtered ( /
+      operationId: getadmin_bookings
+      security:
+        - bearerAuth: []
+      description: Requires permission `booking:read:all`.
+      parameters:
+        - $ref: "#/components/parameters/Page"
+        - $ref: "#/components/parameters/Limit"
+      responses:
+        "200":
+          description: Success
+          content:
+            application/json:
+              schema: *a1
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+  /admin/hospitals:
+    get:
+      tags:
+        - Admin
+      summary: List hospitals, state-scoped
+      operationId: getadmin_hospitals
+      security:
+        - bearerAuth: []
+      description: Requires permission `hospital:manage`.
+      responses:
+        "200":
+          description: Success
+          content:
+            application/json:
+              schema: *a1
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+    post:
+      tags:
+        - Admin
+      summary: Create a hospital
+      operationId: postadmin_hospitals
+      security:
+        - bearerAuth: []
+      description: Requires permission `hospital:manage`.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: true
+              description: JSON request body. See the endpoint summary and docs/API.md for fields.
+      responses:
+        "200":
+          description: Success
+          content:
+            application/json:
+              schema: *a1
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "422":
+          $ref: "#/components/responses/ValidationError"
+  /admin/hospitals/{id}:
+    get:
+      tags:
+        - Admin
+      summary: Get a hospital, state-scoped
+      operationId: getadmin_hospitals_id
+      security:
+        - bearerAuth: []
+      description: Requires permission `hospital:manage`.
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+          description: id path parameter.
+      responses:
+        "200":
+          description: Success
+          content:
+            application/json:
+              schema: *a1
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "404":
+          $ref: "#/components/responses/NotFound"
+    patch:
+      tags:
+        - Admin
+      summary: Update a hospital
+      operationId: patchadmin_hospitals_id
+      security:
+        - bearerAuth: []
+      description: Requires permission `hospital:manage`.
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+          description: id path parameter.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: true
+              description: JSON request body. See the endpoint summary and docs/API.md for fields.
+      responses:
+        "200":
+          description: Success
+          content:
+            application/json:
+              schema: *a1
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "422":
+          $ref: "#/components/responses/ValidationError"
+  /admin/hospitals/{id}/suspend:
+    post:
+      tags:
+        - Admin
+      summary: Suspend a hospital
+      operationId: postadmin_hospitals_id_suspend
+      security:
+        - bearerAuth: []
+      description: Requires permission `hospital:manage`.
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+          description: id path parameter.
+      requestBody:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/SuspendRequest"
+        required: true
+      responses:
+        "200":
+          description: Success
+          content:
+            application/json:
+              schema: *a1
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "422":
+          $ref: "#/components/responses/ValidationError"
+  /admin/hospitals/{id}/activate:
+    post:
+      tags:
+        - Admin
+      summary: Activate a hospital
+      operationId: postadmin_hospitals_id_activate
+      security:
+        - bearerAuth: []
+      description: Requires permission `hospital:manage`.
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+          description: id path parameter.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: true
+              description: JSON request body. See the endpoint summary and docs/API.md for fields.
+      responses:
+        "200":
+          description: Success
+          content:
+            application/json:
+              schema: *a1
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "422":
+          $ref: "#/components/responses/ValidationError"
+  /admin/states:
+    get:
+      tags:
+        - Admin
+      summary: List states
+      operationId: getadmin_states
+      security:
+        - bearerAuth: []
+      description: Requires permission `state:manage`.
+      responses:
+        "200":
+          description: Success
+          content:
+            application/json:
+              schema: *a1
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+    post:
+      tags:
+        - Admin
+      summary: Create a state
+      operationId: postadmin_states
+      security:
+        - bearerAuth: []
+      description: Requires permission `state:manage`.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: true
+              description: JSON request body. See the endpoint summary and docs/API.md for fields.
+      responses:
+        "200":
+          description: Success
+          content:
+            application/json:
+              schema: *a1
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "422":
+          $ref: "#/components/responses/ValidationError"
+  /admin/states/{id}:
+    patch:
+      tags:
+        - Admin
+      summary: Update a state
+      operationId: patchadmin_states_id
+      security:
+        - bearerAuth: []
+      description: Requires permission `state:manage`.
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+          description: id path parameter.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: true
+              description: JSON request body. See the endpoint summary and docs/API.md for fields.
+      responses:
+        "200":
+          description: Success
+          content:
+            application/json:
+              schema: *a1
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "422":
+          $ref: "#/components/responses/ValidationError"
+  /admin/service-areas:
+    get:
+      tags:
+        - Admin
+      summary: List service areas
+      operationId: getadmin_service_areas
+      security:
+        - bearerAuth: []
+      description: Requires permission `service-area:manage`.
+      responses:
+        "200":
+          description: Success
+          content:
+            application/json:
+              schema: *a1
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+    post:
+      tags:
+        - Admin
+      summary: Create a service area
+      operationId: postadmin_service_areas
+      security:
+        - bearerAuth: []
+      description: Requires permission `service-area:manage`.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: true
+              description: JSON request body. See the endpoint summary and docs/API.md for fields.
+      responses:
+        "200":
+          description: Success
+          content:
+            application/json:
+              schema: *a1
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "422":
+          $ref: "#/components/responses/ValidationError"
+  /admin/service-areas/{id}:
+    patch:
+      tags:
+        - Admin
+      summary: Update a service area
+      operationId: patchadmin_service_areas_id
+      security:
+        - bearerAuth: []
+      description: Requires permission `service-area:manage`.
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+          description: id path parameter.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: true
+              description: JSON request body. See the endpoint summary and docs/API.md for fields.
+      responses:
+        "200":
+          description: Success
+          content:
+            application/json:
+              schema: *a1
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "422":
+          $ref: "#/components/responses/ValidationError"
+    delete:
+      tags:
+        - Admin
+      summary: Remove a service area
+      operationId: deleteadmin_service_areas_id
+      security:
+        - bearerAuth: []
+      description: Requires permission `service-area:manage`.
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+          description: id path parameter.
+      responses:
+        "200":
+          description: Success
+          content:
+            application/json:
+              schema: *a1
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "404":
+          $ref: "#/components/responses/NotFound"
+  /admin/providers:
+    get:
+      tags:
+        - Admin
+      summary: List providers, state-scoped
+      operationId: getadmin_providers
+      security:
+        - bearerAuth: []
+      description: Requires permission `provider:read:state`.
+      responses:
+        "200":
+          description: Success
+          content:
+            application/json:
+              schema: *a1
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+  /admin/providers/{id}:
+    get:
+      tags:
+        - Admin
+      summary: Get a provider, state-scoped
+      operationId: getadmin_providers_id
+      security:
+        - bearerAuth: []
+      description: Requires permission `provider:read:state`.
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+          description: id path parameter.
+      responses:
+        "200":
+          description: Success
+          content:
+            application/json:
+              schema: *a1
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "404":
+          $ref: "#/components/responses/NotFound"
+  /admin/providers/{id}/verify:
+    post:
+      tags:
+        - Admin
+      summary: Verify/reject a provider
+      operationId: postadmin_providers_id_verify
+      security:
+        - bearerAuth: []
+      description: Requires permission `provider:verify`.
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+          description: id path parameter.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: true
+              description: JSON request body. See the endpoint summary and docs/API.md for fields.
+      responses:
+        "200":
+          description: Success
+          content:
+            application/json:
+              schema: *a1
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "422":
+          $ref: "#/components/responses/ValidationError"
+  /admin/providers/{id}/activate:
+    post:
+      tags:
+        - Admin
+      summary: Activate a provider
+      operationId: postadmin_providers_id_activate
+      security:
+        - bearerAuth: []
+      description: Requires permission `provider:manage`.
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+          description: id path parameter.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: true
+              description: JSON request body. See the endpoint summary and docs/API.md for fields.
+      responses:
+        "200":
+          description: Success
+          content:
+            application/json:
+              schema: *a1
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "422":
+          $ref: "#/components/responses/ValidationError"
+  /admin/providers/{id}/suspend:
+    post:
+      tags:
+        - Admin
+      summary: Suspend a provider
+      operationId: postadmin_providers_id_suspend
+      security:
+        - bearerAuth: []
+      description: Requires permission `provider:manage`.
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+          description: id path parameter.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: true
+              description: JSON request body. See the endpoint summary and docs/API.md for fields.
+      responses:
+        "200":
+          description: Success
+          content:
+            application/json:
+              schema: *a1
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "422":
+          $ref: "#/components/responses/ValidationError"
+  /admin/ambulances/{id}/verify:
+    post:
+      tags:
+        - Admin
+      summary: Verify/reject a vehicle
+      operationId: postadmin_ambulances_id_verify
+      security:
+        - bearerAuth: []
+      description: Requires permission `ambulance:verify`.
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+          description: id path parameter.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: true
+              description: JSON request body. See the endpoint summary and docs/API.md for fields.
+      responses:
+        "200":
+          description: Success
+          content:
+            application/json:
+              schema: *a1
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "422":
+          $ref: "#/components/responses/ValidationError"
+  /admin/crew/{id}/verify:
+    post:
+      tags:
+        - Admin
+      summary: Verify/reject a crew member
+      operationId: postadmin_crew_id_verify
+      security:
+        - bearerAuth: []
+      description: Requires permission `crew:verify`.
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+          description: id path parameter.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: true
+              description: JSON request body. See the endpoint summary and docs/API.md for fields.
+      responses:
+        "200":
+          description: Success
+          content:
+            application/json:
+              schema: *a1
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "422":
+          $ref: "#/components/responses/ValidationError"
+  /admin/crew-documents/{id}/review:
+    post:
+      tags:
+        - Admin
+      summary: Approve/reject a document
+      operationId: postadmin_crew_documents_id_review
+      security:
+        - bearerAuth: []
+      description: Requires permission `document:review`.
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+          description: id path parameter.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: true
+              description: JSON request body. See the endpoint summary and docs/API.md for fields.
+      responses:
+        "200":
+          description: Success
+          content:
+            application/json:
+              schema: *a1
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "422":
+          $ref: "#/components/responses/ValidationError"
