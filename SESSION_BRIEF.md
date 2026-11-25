@@ -125,8 +125,9 @@ patterns, not React components. Port the ideas to Nuxt composables/middleware:
 6. Route middleware per role tree (`/dispatch`, `/provider`, `/hospital`, `/admin`),
    plus an in-page `<RoleGate>` component. Nuxt auto code-splits pages; add an
    error boundary per role module (verify the current Nuxt API for this).
-7. Shared UI kit (tables, drawers, badges, filters) + five dashboard stubs backed
-   by **real** endpoints from the endpoint map.
+7. Shared UI kit (tables, drawers, badges, filters) + role dashboards backed by
+   **real** endpoints from the endpoint map. `/dispatch` is now the working
+   dispatcher module; `/provider`, `/hospital` and `/admin` remain labelled stubs.
 8. README with run instructions and env var name.
 
 ## Current git state

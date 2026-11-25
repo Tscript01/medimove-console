@@ -410,6 +410,144 @@ table.mm-table {
   font-size: 13px;
 }
 
+.mm-drawer__body {
+  display: grid;
+  align-content: start;
+  gap: var(--mm-space-6);
+  overflow-y: auto;
+  padding-right: 2px;
+}
+
+.mm-detail-section {
+  display: grid;
+  gap: var(--mm-space-3);
+}
+
+.mm-detail-section h4 {
+  margin: 0;
+  font-size: 14px;
+  font-weight: 700;
+}
+
+.mm-inline-badges {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--mm-space-2);
+}
+
+.mm-detail-list {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+  gap: var(--mm-space-3) var(--mm-space-5);
+  margin: 0;
+}
+
+.mm-detail-list > div {
+  display: grid;
+  gap: 2px;
+  min-width: 0;
+}
+
+.mm-detail-list dt {
+  color: var(--mm-text-faint);
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+}
+
+.mm-detail-list dd {
+  margin: 0;
+  overflow-wrap: anywhere;
+  font-size: 14px;
+}
+
+.mm-timeline {
+  display: grid;
+  gap: var(--mm-space-2);
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.mm-timeline li {
+  display: grid;
+  gap: 2px;
+  padding: var(--mm-space-3) var(--mm-space-4);
+  border: 1px solid var(--mm-border);
+  border-radius: var(--mm-radius-sm);
+  background: var(--mm-canvas);
+}
+
+.mm-timeline small,
+.mm-timeline time {
+  color: var(--mm-text-muted);
+  font-size: 12px;
+}
+
+.mm-table--compact th,
+.mm-table--compact td {
+  padding: var(--mm-space-2) var(--mm-space-3);
+  font-size: 12px;
+  vertical-align: top;
+}
+
+.mm-action-grid {
+  display: grid;
+  gap: var(--mm-space-3);
+  padding: var(--mm-space-4);
+  border: 1px solid var(--mm-border);
+  border-radius: var(--mm-radius-sm);
+  background: var(--mm-canvas);
+}
+
+.mm-action-grid__row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-end;
+  gap: var(--mm-space-3);
+}
+
+.mm-action-grid__row label,
+.mm-action-grid > label {
+  display: grid;
+  flex: 1 1 180px;
+  gap: var(--mm-space-1);
+  color: var(--mm-text-muted);
+  font-size: 12px;
+  font-weight: 650;
+}
+
+.mm-action-grid__row select,
+.mm-action-grid__row input,
+.mm-action-grid > label select,
+.mm-action-grid > label input {
+  min-width: 160px;
+}
+
+.mm-notice {
+  display: grid;
+  gap: var(--mm-space-1);
+  padding: var(--mm-space-3) var(--mm-space-4);
+  border: 1px solid rgba(22, 132, 91, 0.25);
+  border-radius: var(--mm-radius-sm);
+  background: rgba(22, 132, 91, 0.08);
+  color: var(--mm-success);
+  font-size: 13px;
+}
+
+.mm-notice--error {
+  border-color: rgba(217, 45, 32, 0.25);
+  background: rgba(217, 45, 32, 0.07);
+  color: var(--mm-emergency);
+}
+
+.mm-notice--warning {
+  border-color: rgba(217, 119, 6, 0.25);
+  background: rgba(217, 119, 6, 0.07);
+  color: var(--mm-warning);
+}
+
 .sr-only {
   position: absolute;
   width: 1px;

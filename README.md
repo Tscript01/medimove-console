@@ -17,15 +17,18 @@ original backend/mobile folders. See `reference/README.md`.
   `<NuxtErrorBoundary>`.
 - Shared light-theme UI kit (Manrope, 44px targets, visible focus, tables,
   drawers, badges, filters, loading/empty/error/offline states).
-- Five dashboard stubs backed only by documented backend endpoints:
-  - `/dispatch` — `GET /dispatch/bookings`
+- A working dispatcher module at `/dispatch`, backed only by documented endpoints:
+  filtered queue, request detail drawer (status trail, offers, trip fixes and
+  server ETA), ranked candidates, available vehicles, offer rounds, retry,
+  manual assign/reassign, escalation and approved-template contact.
+- Remaining role stubs/screens backed only by documented backend endpoints:
   - `/provider` — `GET /providers/me`
   - `/hospital` — `GET /hospitals/me/incoming`
   - `/admin` — `GET /admin/reports/overview`
   - `/mobile-app` — sign-out screen for `PATIENT` / `CREW`
 
-Each dashboard is intentionally a stub. Expand one only after explicit
-confirmation; do not add mocks or invented endpoints.
+The `provider`, `hospital` and `admin` dashboards are intentionally stubs.
+Expand one only after explicit confirmation; do not add mocks or invented endpoints.
 
 ## Requirements
 
